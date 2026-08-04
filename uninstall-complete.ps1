@@ -286,6 +286,61 @@ path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     }
 }
 
+function Scrub-TomlFile([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $py = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $py) { $py = Get-Command python3 -ErrorAction SilentlyContinue }
+    if (-not $py) {
+        Write-Warn "python missing — skip toml-scrub $Path"
+        return
+    }
+    Note "toml-scrub: $Path"
+    if ($DryRun) { return }
+
+    $code = @'
+import re, shutil, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+MARKERS = ("tenetx_proxy_token=", ".tenetx/", ".tenetx.", "tenetx-ask")
+parts = re.split(r"(?=^\s*\[)", text, flags=re.MULTILINE)
+kept, removed = [], 0
+for part in parts:
+    m = re.match(r"^\s*\[([^\]]+)\]", part)
+    if not m:
+        kept.append(part)
+        continue
+    header = m.group(1).strip().lower()
+    body_l = part.lower()
+    is_mcp = header.startswith("mcp_servers.")
+    tenetxish = (
+        "tenetx" in header
+        or header.endswith("(tenetx)")
+        or any(x in body_l for x in MARKERS)
+    )
+    if is_mcp and tenetxish:
+        removed += 1
+        continue
+    kept.append(part)
+if removed == 0:
+    sys.exit(0)
+backup = path.with_name(path.name + ".tenetx-complete-uninstall-backup")
+if not backup.exists():
+    shutil.copy2(path, backup)
+path.write_text("".join(kept), encoding="utf-8")
+'@
+    $tmp = [System.IO.Path]::GetTempFileName() + '.py'
+    try {
+        Set-Content -LiteralPath $tmp -Value $code -Encoding UTF8
+        & $py.Source $tmp $Path
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "toml-scrub failed: $Path"
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Remove-GuardDir([string]$HooksDir) {
     if (-not (Test-Path -LiteralPath $HooksDir)) { return }
     foreach ($g in @('tenetx-guard.py', 'tenetx-guard.sh', 'tenetx-guard.cmd', '.tenetx-guard.json', '.update-state.json')) {
@@ -342,6 +397,8 @@ function Invoke-HardWipe {
 
     Remove-GuardDir (Join-Path $HomeDir '.copilot\hooks')
     Scrub-JsonFile (Join-Path $HomeDir '.copilot\hooks\notification-hooks.json') 'hooks'
+
+    Scrub-TomlFile (Join-Path $HomeDir '.codex\config.toml')
 
     if (Test-Path -LiteralPath $TenetxDir) {
         Note "rmtree: $TenetxDir (full ~/.tenetx wipe)"
