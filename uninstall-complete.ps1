@@ -27,6 +27,17 @@ $ErrorActionPreference = 'Stop'
 function Write-Say([string]$Message) { Write-Host $Message }
 function Write-Warn([string]$Message) { Write-Host "WARN: $Message" -ForegroundColor Yellow }
 
+# Exit helper: hold the window open when run interactively (irm | iex,
+# double-click, & .\file.ps1) so the outcome stays visible. Piped/CI runs
+# (redirected stdin) skip the pause and keep the real exit code.
+function Exit-Host([int]$Code) {
+    if (-not [Console]::IsInputRedirected -and $Host.Name -eq 'ConsoleHost') {
+        Write-Host ''
+        Read-Host 'Press Enter to close this window' | Out-Null
+    }
+    exit $Code
+}
+
 # When piped via irm|iex, bound params may be empty — honor env.
 if (-not $Force -and ($env:TENETX_FORCE -in @('1', 'true', 'TRUE', 'yes', 'YES'))) {
     $Force = $true
@@ -560,7 +571,7 @@ if (-not $Force) {
     Write-Say '  $env:TENETX_FORCE = ''1''; irm <URL>/uninstall-complete.ps1 | iex'
     Write-Say '  # or locally:'
     Write-Say '  .\uninstall-complete.ps1 -Force'
-    exit 0
+    Exit-Host 0
 }
 
 Write-Say ""
@@ -580,21 +591,21 @@ Show-Inventory 'after'
 if ($DryRun) {
     Write-Say ""
     Write-Say 'Dry-run only — no changes applied.'
-    exit 0
+    Exit-Host 0
 }
 
 if ($script:HadError) {
     Write-Say ""
     Write-Say 'COMPLETE-UNINSTALL INCOMPLETE — errors during wipe'
-    exit 1
+    Exit-Host 1
 }
 
 if (-not (Test-Residuals)) {
     Write-Say ""
     Write-Say 'COMPLETE-UNINSTALL INCOMPLETE — residuals remain'
-    exit 1
+    Exit-Host 1
 }
 
 Write-Say ""
 Write-Say 'COMPLETE-UNINSTALL OK'
-exit 0
+Exit-Host 0

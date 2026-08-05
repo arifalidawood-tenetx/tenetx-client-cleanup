@@ -58,11 +58,24 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ---------------------------------------------------------------------------
+# Exit helper: hold the window open when run interactively (irm | iex,
+# double-click, & .\file.ps1) so the outcome stays visible. Piped/CI runs
+# (redirected stdin) skip the pause and keep the real exit code.
+# ---------------------------------------------------------------------------
+function Exit-Host([int]$Code) {
+    if (-not [Console]::IsInputRedirected -and $Host.Name -eq 'ConsoleHost') {
+        Write-Host ''
+        Read-Host 'Press Enter to close this window' | Out-Null
+    }
+    exit $Code
+}
+
+# ---------------------------------------------------------------------------
 # PowerShell 7+ gate (also covered by #Requires, but be explicit for iex)
 # ---------------------------------------------------------------------------
 if ($PSVersionTable.PSVersion.Major -lt 7) {
-    Write-Error "This script requires PowerShell 7+ (pwsh). Refusing Windows PowerShell 5.1. Current: $($PSVersionTable.PSVersion)"
-    exit 2
+    Write-Error "This script requires PowerShell 7+ (pwsh). Refusing Windows PowerShell 5.1. Current: $($PSVersionTable.PSVersion)" -ErrorAction Continue
+    Exit-Host 2
 }
 
 # Default DryRun ON unless -Apply (or -Revert which has its own write path)
@@ -70,8 +83,8 @@ if (-not $Apply -and -not $Revert) {
     $DryRun = $true
 }
 if ($Apply -and $Revert) {
-    Write-Error "Pass either -Apply or -Revert, not both."
-    exit 2
+    Write-Error "Pass either -Apply or -Revert, not both." -ErrorAction Continue
+    Exit-Host 2
 }
 if ($Apply) {
     $DryRun = $false
@@ -859,7 +872,7 @@ foreach ($r in $results) {
 
 if ($failed) {
     Write-ErrMsg "Completed with errors."
-    exit 1
+    Exit-Host 1
 }
 
 if (-not $Apply -and -not $Revert) {
@@ -868,4 +881,4 @@ if (-not $Apply -and -not $Revert) {
 }
 
 Write-Ok "Done."
-exit 0
+Exit-Host 0
