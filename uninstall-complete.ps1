@@ -136,7 +136,10 @@ function Show-Inventory([string]$Label) {
         @{ Name = 'codex'; Hooks = (Join-Path $TenetxDir 'hooks\codex') },
         @{ Name = 'copilot'; Hooks = (Join-Path $HomeDir '.copilot\hooks') }
     )
-    $guards = @('tenetx-guard.py', 'tenetx-guard.sh', 'tenetx-guard.cmd', '.tenetx-guard.json', '.update-state.json')
+    $guards = @(
+        'tenetx-guard.py', 'tenetx-guard.sh', 'tenetx-guard.cmd', 'tenetx-guard.ps1',
+        '.tenetx-guard.json', '.update-state.json'
+    )
     foreach ($entry in $ide) {
         $found = @()
         foreach ($g in $guards) {
@@ -146,6 +149,14 @@ function Show-Inventory([string]$Label) {
         foreach ($sub in @('versions', 'current')) {
             $p = Join-Path $entry.Hooks $sub
             if (Test-Path -LiteralPath $p) { $found += $p }
+        }
+        # Stray tenetx-* residue under hooks dir (wrappers, backups) — name match only
+        if (Test-Path -LiteralPath $entry.Hooks) {
+            $strays = @(Get-ChildItem -LiteralPath $entry.Hooks -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -like 'tenetx-*' -or $_.Name -like '.tenetx-*' })
+            foreach ($s in $strays) {
+                if ($found -notcontains $s.FullName) { $found += $s.FullName }
+            }
         }
         if ($found.Count -gt 0) {
             Write-Say ("IDE {0}: {1}" -f $entry.Name, ($found -join ' '))
@@ -343,7 +354,11 @@ path.write_text("".join(kept), encoding="utf-8")
 
 function Remove-GuardDir([string]$HooksDir) {
     if (-not (Test-Path -LiteralPath $HooksDir)) { return }
-    foreach ($g in @('tenetx-guard.py', 'tenetx-guard.sh', 'tenetx-guard.cmd', '.tenetx-guard.json', '.update-state.json')) {
+    # Known guard artifacts (incl. orphan PowerShell wrapper)
+    foreach ($g in @(
+            'tenetx-guard.py', 'tenetx-guard.sh', 'tenetx-guard.cmd', 'tenetx-guard.ps1',
+            '.tenetx-guard.json', '.update-state.json'
+        )) {
         $p = Join-Path $HooksDir $g
         if (Test-Path -LiteralPath $p) {
             Note "delete: $p"
@@ -352,6 +367,25 @@ function Remove-GuardDir([string]$HooksDir) {
                     Write-Warn "delete failed $p : $_"
                     $script:HadError = $true
                 }
+            }
+        }
+    }
+    # Stray tenetx-* / .tenetx-* files only (wrappers, residue). Never touch non-tenetx files.
+    # Do NOT scan repo local-stacks/ mirrors — inventory is under user HOME + TENETX_DIR only.
+    $strays = @(Get-ChildItem -LiteralPath $HooksDir -File -ErrorAction SilentlyContinue |
+            Where-Object {
+                ($_.Name -like 'tenetx-*' -or $_.Name -like '.tenetx-*') -and
+                $_.Name -notin @(
+                    'tenetx-guard.py', 'tenetx-guard.sh', 'tenetx-guard.cmd', 'tenetx-guard.ps1',
+                    '.tenetx-guard.json'
+                )
+            })
+    foreach ($s in $strays) {
+        Note "delete: $($s.FullName) (tenetx-* residue)"
+        if (-not $DryRun) {
+            try { Remove-Item -LiteralPath $s.FullName -Force } catch {
+                Write-Warn "delete failed $($s.FullName) : $_"
+                $script:HadError = $true
             }
         }
     }
@@ -494,10 +528,21 @@ function Test-Residuals {
         (Join-Path $HomeDir '.windsurf\hooks'),
         (Join-Path $HomeDir '.copilot\hooks')
     )) {
-        foreach ($g in @('tenetx-guard.py', 'tenetx-guard.sh', 'tenetx-guard.cmd', '.tenetx-guard.json', '.update-state.json')) {
+        foreach ($g in @(
+                'tenetx-guard.py', 'tenetx-guard.sh', 'tenetx-guard.cmd', 'tenetx-guard.ps1',
+                '.tenetx-guard.json', '.update-state.json'
+            )) {
             $p = Join-Path $hooks $g
             if (Test-Path -LiteralPath $p) {
                 Write-Say "residual guard: $p"
+                $fail = $true
+            }
+        }
+        if (Test-Path -LiteralPath $hooks) {
+            $left = @(Get-ChildItem -LiteralPath $hooks -File -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -like 'tenetx-*' -or $_.Name -like '.tenetx-*' })
+            foreach ($s in $left) {
+                Write-Say "residual guard: $($s.FullName)"
                 $fail = $true
             }
         }
