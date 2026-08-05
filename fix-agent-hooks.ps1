@@ -62,10 +62,20 @@ $ErrorActionPreference = 'Stop'
 # double-click, & .\file.ps1) so the outcome stays visible. Piped/CI runs
 # (redirected stdin) skip the pause and keep the real exit code.
 # ---------------------------------------------------------------------------
+
+# True only for a real interactive console: a redirected/piped stdin, a
+# non-console host, or -NonInteractive must never reach Read-Host.
+function Test-Interactive {
+    if ([Console]::IsInputRedirected) { return $false }
+    if (-not [Environment]::UserInteractive) { return $false }
+    if ($Host.Name -ne 'ConsoleHost') { return $false }
+    return $true
+}
+
 function Exit-Host([int]$Code) {
-    if (-not [Console]::IsInputRedirected -and $Host.Name -eq 'ConsoleHost') {
+    if (Test-Interactive) {
         Write-Host ''
-        Read-Host 'Press Enter to close this window' | Out-Null
+        try { Read-Host 'Press Enter to close this window' | Out-Null } catch { }
     }
     exit $Code
 }
@@ -76,6 +86,56 @@ function Exit-Host([int]$Code) {
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     Write-Error "This script requires PowerShell 7+ (pwsh). Refusing Windows PowerShell 5.1. Current: $($PSVersionTable.PSVersion)" -ErrorAction Continue
     Exit-Host 2
+}
+
+# ---------------------------------------------------------------------------
+# Action resolution for `irm | iex`, which passes no arguments at all:
+#   explicit CLI switch > TENETX_FIX_HOOKS_ACTION > interactive menu > dry-run
+# ---------------------------------------------------------------------------
+if (-not $Apply -and -not $Revert -and -not $DryRun) {
+    $resolved = $null
+    if (-not [string]::IsNullOrWhiteSpace($env:TENETX_FIX_HOOKS_ACTION)) {
+        $resolved = $env:TENETX_FIX_HOOKS_ACTION.Trim().ToLowerInvariant()
+        if ($resolved -notin @('dry-run', 'dryrun', 'apply', 'revert')) {
+            Write-Warning "Ignoring TENETX_FIX_HOOKS_ACTION='$($env:TENETX_FIX_HOOKS_ACTION)' (expected: dry-run, apply, revert)"
+            $resolved = $null
+        }
+    }
+    # Menu only for a real console AND only outside the test sandbox, so
+    # tests/smoke-fix-hooks.ps1 (which sets TENETX_FIX_HOOKS_HOME) never blocks.
+    if ($null -eq $resolved -and [string]::IsNullOrWhiteSpace($env:TENETX_FIX_HOOKS_HOME) -and (Test-Interactive)) {
+        Write-Host ''
+        Write-Host 'TenetX agent hook repair'
+        Write-Host '========================'
+        Write-Host '1. Dry-run (default) - show planned rewrites, write nothing'
+        Write-Host '2. Apply - rewrite hook commands (creates .tenetx-bak-<utc> first)'
+        Write-Host '3. Apply + Verify - apply, then re-parse and smoke the guard'
+        Write-Host '4. Revert - restore from the latest backup'
+        Write-Host '5. Exit'
+        Write-Host ''
+        $choice = $null
+        try { $choice = Read-Host 'Select action [1-5]' } catch { $choice = $null }
+        switch ($choice) {
+            '2' { $resolved = 'apply' }
+            '3' { $resolved = 'apply'; $Verify = $true }
+            '4' { $resolved = 'revert' }
+            '5' { Exit-Host 0 }
+            default { $resolved = 'dry-run' }
+        }
+    }
+    switch ($resolved) {
+        'apply'  { $Apply = $true }
+        'revert' { $Revert = $true }
+        default  { }   # dry-run: the existing default below handles it
+    }
+}
+
+# Agent selection / verify via env, since bound params are empty under iex.
+if (-not [string]::IsNullOrWhiteSpace($env:TENETX_FIX_HOOKS_AGENTS)) {
+    $Agents = @($env:TENETX_FIX_HOOKS_AGENTS)
+}
+if ($env:TENETX_FIX_HOOKS_VERIFY -in @('1', 'true', 'TRUE', 'yes', 'YES')) {
+    $Verify = $true
 }
 
 # Default DryRun ON unless -Apply (or -Revert which has its own write path)

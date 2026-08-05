@@ -1,4 +1,4 @@
-﻿#Requires -Version 7.0
+#Requires -Version 7.0
 <#
 .SYNOPSIS
     Smoke tests for fix-agent-hooks.ps1 (sandboxed home + real decision-body assert).
@@ -146,9 +146,11 @@ function Write-FixtureCursor([string]$SandboxRoot, [string]$Shape) {
 function Invoke-Fix {
     param(
         [Parameter(Mandatory)][string]$SandboxRoot,
-        [string[]]$ArgsExtra = @()
+        [string[]]$ArgsExtra = @(),
+        [hashtable]$EnvExtra = @{}
     )
     $env:TENETX_FIX_HOOKS_HOME = $SandboxRoot
+    foreach ($k in $EnvExtra.Keys) { Set-Item -Path "Env:$k" -Value $EnvExtra[$k] }
     try {
         $allArgs = @('-NoProfile', '-File', $FixScript) + $ArgsExtra
         $out = & pwsh @allArgs 2>&1 | Out-String
@@ -158,6 +160,7 @@ function Invoke-Fix {
         }
     } finally {
         Remove-Item Env:TENETX_FIX_HOOKS_HOME -ErrorAction SilentlyContinue
+        foreach ($k in $EnvExtra.Keys) { Remove-Item -Path "Env:$k" -ErrorAction SilentlyContinue }
     }
 }
 
@@ -513,6 +516,94 @@ try {
             }
         } else {
             Write-Fail "malformed-restore: revert exit=$($rr.ExitCode)"
+        }
+    }
+} finally {
+    Remove-Item -LiteralPath $SandboxRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 6a) Env-only apply (the irm|iex contract): TENETX_FIX_HOOKS_ACTION=apply
+$SandboxRoot = New-SandboxRoot
+try {
+    $claude = Write-FixtureClaude -SandboxRoot $SandboxRoot -GuardCmdShape 'bare'
+    $r = Invoke-Fix -SandboxRoot $SandboxRoot -EnvExtra @{ TENETX_FIX_HOOKS_ACTION = 'apply' }
+    if ($r.ExitCode -eq 0 -and $r.Output -match 'Mode: APPLY') {
+        Write-Pass 'env-apply: TENETX_FIX_HOOKS_ACTION=apply -> Mode APPLY, exit 0'
+    } else {
+        Write-Fail "env-apply: exit=$($r.ExitCode) output lacks 'Mode: APPLY'`n$($r.Output)"
+    }
+    $tx = @(Get-CommandValues $claude | Where-Object { $_ -match 'tenetx-guard\.cmd' })
+    $bad = @($tx | Where-Object { $_ -notmatch '^".*tenetx-guard\.cmd"$' })
+    if (@($tx).Count -ge 1 -and @($bad).Count -eq 0) {
+        Write-Pass 'env-apply: guard commands written with embedded quotes'
+    } else {
+        Write-Fail "env-apply: quoted shape missing: $($tx -join ' | ')"
+    }
+} finally {
+    Remove-Item -LiteralPath $SandboxRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 6b) Unknown env action -> warning + dry-run, file untouched
+$SandboxRoot = New-SandboxRoot
+try {
+    $claude = Write-FixtureClaude -SandboxRoot $SandboxRoot -GuardCmdShape 'bare'
+    $before = Get-Sha $claude
+    $r = Invoke-Fix -SandboxRoot $SandboxRoot -EnvExtra @{ TENETX_FIX_HOOKS_ACTION = 'bogus' }
+    $after = Get-Sha $claude
+    if ($r.ExitCode -eq 0 -and $r.Output -match 'Ignoring TENETX_FIX_HOOKS_ACTION' -and $r.Output -match 'Mode: DRY-RUN') {
+        Write-Pass 'env-bogus: unknown action warned + fell back to dry-run'
+    } else {
+        Write-Fail "env-bogus: exit=$($r.ExitCode) missing warning/dry-run marker`n$($r.Output)"
+    }
+    if ($before -eq $after) {
+        Write-Pass 'env-bogus: file SHA unchanged under dry-run'
+    } else {
+        Write-Fail "env-bogus: file mutated shaBefore=$before shaAfter=$after"
+    }
+} finally {
+    Remove-Item -LiteralPath $SandboxRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 6c) Env agent selection: TENETX_FIX_HOOKS_AGENTS=claude skips copilot
+$SandboxRoot = New-SandboxRoot
+try {
+    $claude = Write-FixtureClaude -SandboxRoot $SandboxRoot -GuardCmdShape 'bare'
+    $copilot = Write-FixtureCopilot -SandboxRoot $SandboxRoot -Shape 'bare'
+    $copilotShaBefore = Get-Sha $copilot
+    $r = Invoke-Fix -SandboxRoot $SandboxRoot -EnvExtra @{
+        TENETX_FIX_HOOKS_ACTION = 'apply'
+        TENETX_FIX_HOOKS_AGENTS = 'claude'
+    }
+    if ($r.ExitCode -eq 0 -and $r.Output -match 'Agents: claude' -and $r.Output -notmatch 'copilot') {
+        Write-Pass 'env-agents: env CSV selects only claude (no copilot section)'
+    } else {
+        Write-Fail "env-agents: exit=$($r.ExitCode) bad agent selection`n$($r.Output)"
+    }
+    $copilotShaAfter = Get-Sha $copilot
+    if ($copilotShaBefore -eq $copilotShaAfter) {
+        Write-Pass 'env-agents: copilot fixture untouched'
+    } else {
+        Write-Fail 'env-agents: copilot fixture was modified despite not being selected'
+    }
+} finally {
+    Remove-Item -LiteralPath $SandboxRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 6d) Env revert: TENETX_FIX_HOOKS_ACTION=revert restores pre-apply bytes
+$SandboxRoot = New-SandboxRoot
+try {
+    $claude = Write-FixtureClaude -SandboxRoot $SandboxRoot -GuardCmdShape 'bare'
+    $before = Get-Sha $claude
+    $ra = Invoke-Fix -SandboxRoot $SandboxRoot -EnvExtra @{ TENETX_FIX_HOOKS_ACTION = 'apply' }
+    if ($ra.ExitCode -ne 0 -or $ra.Output -notmatch 'Mode: APPLY') {
+        Write-Fail "env-revert: setup apply failed exit=$($ra.ExitCode)"
+    } else {
+        $rr = Invoke-Fix -SandboxRoot $SandboxRoot -EnvExtra @{ TENETX_FIX_HOOKS_ACTION = 'revert' }
+        $after = Get-Sha $claude
+        if ($rr.ExitCode -eq 0 -and $rr.Output -match 'Mode: REVERT' -and $before -eq $after) {
+            Write-Pass 'env-revert: env revert restored pre-apply SHA'
+        } else {
+            Write-Fail "env-revert: exit=$($rr.ExitCode) shaBefore=$before shaAfter=$after`n$($rr.Output)"
         }
     }
 } finally {

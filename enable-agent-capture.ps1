@@ -56,6 +56,15 @@ $VarName = 'TENETX_AGENT_CAPTURE'
 $EnableValue = '1'
 $DisableValue = '0'
 
+# True only for a real interactive console: a redirected/piped stdin, a
+# non-console host, or -NonInteractive must never reach Read-Host.
+function Test-Interactive {
+    if ([Console]::IsInputRedirected) { return $false }
+    if (-not [Environment]::UserInteractive) { return $false }
+    if ($Host.Name -ne 'ConsoleHost') { return $false }
+    return $true
+}
+
 # Resolve action: CLI switches (highest priority) > env var > default to status
 # CLI wins over env. NEVER default to enable.
 $action = $null
@@ -81,36 +90,31 @@ if ($null -eq $action -and $env:TENETX_CAPTURE_ACTION) {
     }
 }
 
-# If still no action, try interactive menu if stdin is available
-if ($null -eq $action) {
-    # Check if interactive (can read from host)
-    if ([Environment]::UserInteractive -and -not $env:TERM_PROGRAM) {
-        # Skip interactive in piped/non-interactive context; fall back to default
-        if (-not ([Console]::IsInputRedirected)) {
-            Write-Host ""
-            Write-Host "TenetX agent capture control"
-            Write-Host "=========================="
-            Write-Host "1. Status (show current state)"
-            Write-Host "2. Enable"
-            Write-Host "3. Disable"
-            Write-Host "4. Reset"
-            Write-Host "5. Help"
-            Write-Host "6. Exit"
-            Write-Host ""
-            $choice = Read-Host "Select action [1-6]"
-            $choiceMap = @{
-                '1' = 'status'
-                '2' = 'enable'
-                '3' = 'disable'
-                '4' = 'reset'
-                '5' = 'help'
-                '6' = $null
-            }
-            $action = $choiceMap[$choice]
-            if ($null -eq $action) {
-                exit 0
-            }
-        }
+# If still no action, try interactive menu (Test-Interactive covers stdin/host)
+if ($null -eq $action -and (Test-Interactive)) {
+    Write-Host ""
+    Write-Host "TenetX agent capture control"
+    Write-Host "=========================="
+    Write-Host "1. Status (show current state)"
+    Write-Host "2. Enable"
+    Write-Host "3. Disable"
+    Write-Host "4. Reset"
+    Write-Host "5. Help"
+    Write-Host "6. Exit"
+    Write-Host ""
+    $choice = $null
+    try { $choice = Read-Host "Select action [1-6]" } catch { $choice = $null }
+    $choiceMap = @{
+        '1' = 'status'
+        '2' = 'enable'
+        '3' = 'disable'
+        '4' = 'reset'
+        '5' = 'help'
+        '6' = $null
+    }
+    $action = $choiceMap[$choice]
+    if ($choice -eq '6') {
+        exit 0
     }
 }
 

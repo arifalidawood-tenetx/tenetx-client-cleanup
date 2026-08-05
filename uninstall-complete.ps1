@@ -30,10 +30,20 @@ function Write-Warn([string]$Message) { Write-Host "WARN: $Message" -ForegroundC
 # Exit helper: hold the window open when run interactively (irm | iex,
 # double-click, & .\file.ps1) so the outcome stays visible. Piped/CI runs
 # (redirected stdin) skip the pause and keep the real exit code.
+
+# True only for a real interactive console: a redirected/piped stdin, a
+# non-console host, or -NonInteractive must never reach Read-Host.
+function Test-Interactive {
+    if ([Console]::IsInputRedirected) { return $false }
+    if (-not [Environment]::UserInteractive) { return $false }
+    if ($Host.Name -ne 'ConsoleHost') { return $false }
+    return $true
+}
+
 function Exit-Host([int]$Code) {
-    if (-not [Console]::IsInputRedirected -and $Host.Name -eq 'ConsoleHost') {
+    if (Test-Interactive) {
         Write-Host ''
-        Read-Host 'Press Enter to close this window' | Out-Null
+        try { Read-Host 'Press Enter to close this window' | Out-Null } catch { }
     }
     exit $Code
 }
@@ -43,6 +53,34 @@ if (-not $Force -and ($env:TENETX_FORCE -in @('1', 'true', 'TRUE', 'yes', 'YES')
     $Force = $true
 }
 if ($DryRun) { $Force = $true }
+
+# irm | iex passes no arguments; offer the action when nothing explicit was given.
+if (-not $Force -and (Test-Interactive)) {
+    Write-Host ''
+    Write-Host 'TenetX client cleanup'
+    Write-Host '====================='
+    Write-Host '1. Inventory only (default) - list artifacts, change nothing'
+    Write-Host '2. Dry-run wipe - show every action without deleting'
+    Write-Host '3. WIPE - destructive removal of TenetX client artifacts'
+    Write-Host '4. Exit'
+    Write-Host ''
+    $choice = $null
+    try { $choice = Read-Host 'Select action [1-4]' } catch { $choice = $null }
+    switch ($choice) {
+        '2' { $DryRun = $true; $Force = $true }
+        '3' {
+            $confirm = $null
+            try { $confirm = Read-Host 'Type WIPE to confirm destructive removal' } catch { $confirm = $null }
+            if ($confirm -ceq 'WIPE') {
+                $Force = $true
+            } else {
+                Write-Say 'Confirmation mismatch - staying in inventory-only mode.'
+            }
+        }
+        '4' { Exit-Host 0 }
+        default { }   # inventory only
+    }
+}
 
 $HomeDir = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($env:HOME) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
 $TenetxDir = if ($env:TENETX_CONFIG_DIR) { $env:TENETX_CONFIG_DIR } else { Join-Path $HomeDir '.tenetx' }
