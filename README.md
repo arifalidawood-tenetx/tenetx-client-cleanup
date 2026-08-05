@@ -23,31 +23,31 @@ Removes TenetX client artifacts beyond the product's built-in uninstall.
 
 Inventory/wipe includes guard scripts under agent hooks dirs (`tenetx-guard.py` / `.sh` / `.cmd` / `.ps1`) and other `tenetx-*` residue file names. Does **not** touch product-repo `local-stacks/` mirrors.
 
-### One-liners (release v1.0.0)
+### One-liners (release v1.3.0)
 
 **macOS / Linux — inventory:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.0.0/uninstall-complete.sh | sh
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/uninstall-complete.sh | sh
 ```
 
 **macOS / Linux — wipe:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.0.0/uninstall-complete.sh | sh -s -- --force
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/uninstall-complete.sh | sh -s -- --force
 ```
 
 **Windows — inventory:**
 
 ```powershell
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.0.0/uninstall-complete.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/uninstall-complete.ps1 | iex
 ```
 
 **Windows — wipe:**
 
 ```powershell
 $env:TENETX_FORCE = '1'
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.0.0/uninstall-complete.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/uninstall-complete.ps1 | iex
 ```
 
 ### Local clone
@@ -73,44 +73,44 @@ os.environ.get("TENETX_AGENT_CAPTURE", "<baked-default>") == "1"
 
 The baked default is usually `0` unless the org was in server `TENETX_CAPTURE_ORGS` at hook install time. This script sets the client override so capture works without reinstalling hooks.
 
-### One-liners (release v1.1.0)
+### One-liners (release v1.3.0)
 
 **macOS / Linux — enable:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.1.0/enable-agent-capture.sh | sh -s -- enable
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/enable-agent-capture.sh | sh -s -- enable
 ```
 
 **macOS / Linux — disable:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.1.0/enable-agent-capture.sh | sh -s -- disable
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/enable-agent-capture.sh | sh -s -- disable
 ```
 
 **macOS / Linux — status:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.1.0/enable-agent-capture.sh | sh -s -- status
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/enable-agent-capture.sh | sh -s -- status
 ```
 
 **Windows — enable:**
 
 ```powershell
 $env:TENETX_CAPTURE_ACTION = 'enable'
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.1.0/enable-agent-capture.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/enable-agent-capture.ps1 | iex
 ```
 
 **Windows — disable:**
 
 ```powershell
 $env:TENETX_CAPTURE_ACTION = 'disable'
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.1.0/enable-agent-capture.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/enable-agent-capture.ps1 | iex
 ```
 
 **Windows — status:**
 
 ```powershell
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.1.0/enable-agent-capture.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/enable-agent-capture.ps1 | iex
 ```
 
 ### Local clone
@@ -193,19 +193,19 @@ pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Apply -IncludeCursor -IncludeCodex
 pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Revert -Agents claude,copilot
 ```
 
-### One-liners (release v1.2.0)
+### One-liners (release v1.3.0)
 
 **Windows — dry-run:**
 
 ```powershell
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.2.0/fix-agent-hooks.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/fix-agent-hooks.ps1 | iex
 ```
 
 **Windows — apply (claude + copilot defaults):**
 
 ```powershell
 # Download then apply (iex alone cannot pass -Apply reliably)
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.2.0/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
 pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Apply -Verify
 ```
 
@@ -264,27 +264,29 @@ Requires PowerShell 7+, optional real install paths for decision-body assert (`t
 
 ## Versions
 
-### v1.2.0 (current)
+### v1.3.0 (current)
 
-Adds Windows `fix-agent-hooks.ps1` (surgical TenetX guard quote rewrite) plus uninstall inventory of `tenetx-guard.ps1` / `tenetx-*` residue:
+All installer one-liners now serve the unified **v1.3.0 asset set** (`fix-agent-hooks.ps1`, `uninstall-complete.ps1` / `.sh`, `enable-agent-capture.ps1` / `.sh`). Publishes the v1.2.0 feature set (`fix-agent-hooks.ps1` + wipe residue sweep) as an actual release:
 
 ```powershell
 # Dry-run
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.2.0/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
 pwsh -NoProfile -File .\fix-agent-hooks.ps1
 
 # Apply
 pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Apply -Verify
 ```
 
-```powershell
-# Uninstall inventory / wipe (same v1.2.0 asset set)
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.2.0/uninstall-complete.ps1 | iex
-```
-
 **Unix:** `fix-agent-hooks` N/A (Windows-only).
 
 ### Previous versions
+
+**v1.2.0** — Adds Windows `fix-agent-hooks.ps1` (surgical TenetX guard quote rewrite) plus uninstall inventory of `tenetx-guard.ps1` / `tenetx-*` residue. Commands ship in the v1.3.0 asset set:
+
+```powershell
+# Uninstall inventory / wipe
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/uninstall-complete.ps1 | iex
+```
 
 **v1.1.0** — Agent capture enable/disable/reset/status with:
 - Three-state semantics: enable (1), disable (0), reset (unset)
