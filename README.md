@@ -193,19 +193,19 @@ pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Apply -IncludeCursor -IncludeCodex
 pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Revert -Agents claude,copilot
 ```
 
-### One-liners (release v1.3.0)
+### One-liners (release v1.3.1)
 
 **Windows — dry-run:**
 
 ```powershell
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/fix-agent-hooks.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/fix-agent-hooks.ps1 | iex
 ```
 
 **Windows — apply (claude + copilot defaults):**
 
 ```powershell
 # Download then apply (iex alone cannot pass -Apply reliably)
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
 pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Apply -Verify
 ```
 
@@ -254,6 +254,7 @@ Requires PowerShell 7+, optional real install paths for decision-body assert (`t
 | `-Verify` | Re-parse + optional guard smoke after apply |
 | `-Agents a,b` | Subset: `claude`, `copilot`, `cursor`, `codex` |
 | `-IncludeCursor` / `-IncludeCodex` | Add those agents |
+| `-NoDedupe` / `TENETX_FIX_HOOKS_DEDUPE=0` | Keep duplicate guard entries (repair quoting only) |
 | `TENETX_FIX_HOOKS_HOME` | Override home root (tests / sandbox) |
 
 ## Platforms
@@ -264,7 +265,27 @@ Requires PowerShell 7+, optional real install paths for decision-body assert (`t
 
 ## Versions
 
-### v1.3.0 (current)
+### v1.3.1 (current)
+
+`fix-agent-hooks.ps1` fix release:
+
+- **Real verify smoke**: post-write bash smoke now runs the decoded command via a temp `.sh` + stdin payload (portable Git-bash discovery, self-contained payload — no machine-specific paths). Fixes the false `smoke-fail exit=127` on Claude (broken nested-quote `-c "..."` argv).
+- **Duplicate-guard dedupe**: `-Apply` collapses duplicate TenetX guard entries per event (first wins, matcher-aware); foreign hooks (bun / orca etc.) are never touched and their count is verified. Opt out with `-NoDedupe` / `TENETX_FIX_HOOKS_DEDUPE=0`.
+- **Copilot repaired-shape detection**: recognises `"C:\...\tenetx-guard.cmd" eventToken` so re-runs report `skip=N` instead of `rewrite=0 skip=0`, and the guard smoke gets a real sample.
+- **Honest status**: a failed verify returns `verify-failed` (structural vs smoke class) instead of throwing and wiping the change count from the summary; guard runtime failures (exit ≠ 0/2/126/127) are warnings, not run failures.
+
+```powershell
+# Dry-run
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
+pwsh -NoProfile -File .\fix-agent-hooks.ps1
+
+# Apply
+pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Apply -Verify
+```
+
+**Unix:** `fix-agent-hooks` N/A (Windows-only).
+
+### v1.3.0
 
 All installer one-liners now serve the unified **v1.3.0 asset set** (`fix-agent-hooks.ps1`, `uninstall-complete.ps1` / `.sh`, `enable-agent-capture.ps1` / `.sh`). Publishes the v1.2.0 feature set (`fix-agent-hooks.ps1` + wipe residue sweep) as an actual release:
 

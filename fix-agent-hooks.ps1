@@ -51,7 +51,8 @@ param(
     [switch]$IncludeCodex,
     [switch]$IncludeCursor,
     [switch]$Revert,
-    [switch]$Verify
+    [switch]$Verify,
+    [switch]$NoDedupe
 )
 
 Set-StrictMode -Version Latest
@@ -108,8 +109,8 @@ if (-not $Apply -and -not $Revert -and -not $DryRun) {
         Write-Host 'TenetX agent hook repair'
         Write-Host '========================'
         Write-Host '1. Dry-run (default) - show planned rewrites, write nothing'
-        Write-Host '2. Apply - rewrite hook commands (creates .tenetx-bak-<utc> first)'
-        Write-Host '3. Apply + Verify - apply, then re-parse and smoke the guard'
+        Write-Host '2. Apply - rewrite hook quoting + drop duplicate guard entries (creates .tenetx-bak-<utc> first)'
+        Write-Host '3. Apply + Verify - apply, then re-parse, dedupe-check and smoke the guard'
         Write-Host '4. Revert - restore from the latest backup'
         Write-Host '5. Exit'
         Write-Host ''
@@ -137,6 +138,9 @@ if (-not [string]::IsNullOrWhiteSpace($env:TENETX_FIX_HOOKS_AGENTS)) {
 if ($env:TENETX_FIX_HOOKS_VERIFY -in @('1', 'true', 'TRUE', 'yes', 'YES')) {
     $Verify = $true
 }
+if ($env:TENETX_FIX_HOOKS_DEDUPE -in @('0', 'false', 'FALSE', 'no', 'NO')) {
+    $NoDedupe = $true
+}
 
 # Default DryRun ON unless -Apply (or -Revert which has its own write path)
 if (-not $Apply -and -not $Revert) {
@@ -160,10 +164,9 @@ if (-not [string]::IsNullOrWhiteSpace($env:TENETX_FIX_HOOKS_HOME)) {
     }
 }
 
-$GitBash = 'C:\Program Files\Git\bin\bash.exe'
-$DefaultPayload = 'C:/Users/aadx3d/codes/tenetx-pms/.omo/scratch/windowstest-20260804/payload.json'
-# Also accept Windows path form of payload for Test-Path
-$DefaultPayloadWin = 'C:\Users\aadx3d\codes\tenetx-pms\.omo\scratch\windowstest-20260804\payload.json'
+# Self-contained smoke payload (no machine-specific paths): a PreToolUse event
+# for Bash with a trivial command. TENETX_FIX_HOOKS_PAYLOAD overrides it when set.
+$SmokePayloadJson = '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo tenetx-fix-hooks-smoke"}}'
 
 # ---------------------------------------------------------------------------
 # Agent catalog
@@ -269,7 +272,8 @@ function Test-EndsWithTenetxGuard([string]$Decoded) {
     # Strip surrounding quotes and take last path-ish token before optional event args
     $core = $trim
     # Match ...tenetx-guard.cmd at end of a path segment, optional trailing args
-    if ($core -match '(?i)tenetx-guard\.cmd(\s|$)') {
+    # (" after .cmd covers the repaired copilot shape "path" eventToken)
+    if ($core -match '(?i)tenetx-guard\.cmd(?:"|\s|$)') {
         return $true
     }
     return $false
@@ -320,8 +324,10 @@ function Get-GuardPathFromDecoded([string]$Decoded, [string]$FallbackGuard) {
 }
 
 function Get-CopilotEventToken([string]$Decoded) {
-    # Existing lowercase event after the cmd path, e.g. preToolUse
-    if ($Decoded -match '(?i)tenetx-guard\.cmd\s+(\S+)') {
+    # Existing lowercase event after the cmd path, e.g. preToolUse.
+    # Handles both shapes: "C:\...\tenetx-guard.cmd" preToolUse  (quoted, repaired)
+    # and                       C:\...\tenetx-guard.cmd preToolUse  (bare).
+    if ($Decoded -match '(?i)tenetx-guard\.cmd"?\s+(\S+)') {
         return $Matches[1]
     }
     return $null
@@ -530,6 +536,171 @@ function Walk-HooksSubtree {
     return $changes
 }
 
+function Get-ForeignCommandCount($HooksNode, [string]$Shape) {
+    # Count hook leaves carrying the command/bash property that are NOT
+    # tenetx-guard entries (bun, claude-mem, orca claude-hook.cmd, ...).
+    # Used to prove verify never touches foreign hooks.
+    if ($null -eq $HooksNode) { return 0 }
+    $cmdProp = Get-CommandPropertyName $Shape
+    $foreign = [System.Collections.Generic.List[int]]::new()
+
+    function Visit-Foreign($Node) {
+        if ($null -eq $Node) { return }
+        if ($Node.PSObject -and $Node.PSObject.Properties[$cmdProp]) {
+            $raw = [string]$Node.$cmdProp
+            $decoded = Get-DecodedCommand $raw
+            if (-not (Test-EndsWithTenetxGuard $raw) -and -not (Test-EndsWithTenetxGuard $decoded)) {
+                $foreign.Add(1)
+            }
+        }
+        if ($Node.PSObject -and $Node.PSObject.Properties['hooks']) {
+            $inner = ConvertTo-ArraySafe $Node.hooks
+            foreach ($item in $inner) { Visit-Foreign $item }
+        }
+        foreach ($prop in @($Node.PSObject.Properties)) {
+            if ($prop.Name -in @($cmdProp, 'hooks', 'type', 'timeout', 'matcher', 'failClosed')) { continue }
+            $val = $prop.Value
+            if ($null -eq $val -or $val -is [string]) { continue }
+            if ($val -is [System.Collections.IEnumerable] -and -not ($val -is [System.Collections.IDictionary]) -and -not ($val -is [pscustomobject])) {
+                foreach ($item in $val) { Visit-Foreign $item }
+            } elseif (Test-IsHookLeafOrGroup $val) {
+                Visit-Foreign $val
+            } elseif ($val.PSObject) {
+                Visit-Foreign $val
+            }
+        }
+    }
+
+    Visit-Foreign $HooksNode
+    return $foreign.Count
+}
+
+function Remove-DuplicateGuardEntries {
+    param(
+        [Parameter(Mandatory)]$HooksNode,
+        [Parameter(Mandatory)][string]$AgentName,
+        [Parameter(Mandatory)][string]$FallbackGuard,
+        [Parameter(Mandatory)][string]$Shape,
+        [switch]$Mutate
+    )
+
+    # Collapses duplicate tenetx-guard entries per event. Identity is derived
+    # EXACTLY like Walk-HooksSubtree's expected command (path normalisation +
+    # copilot event token) plus the owning group's matcher — so a quoted entry
+    # and its bare twin get the same key and the later one is dropped.
+    # First occurrence always wins; non-guard leaves and groups that still hold
+    # one are never touched (protects co-resident foreign hooks like Orca's).
+    $cmdProp = Get-CommandPropertyName $Shape
+    $changes = [System.Collections.Generic.List[object]]::new()
+
+    function Get-GuardIdentityKey($Entry, [string]$MatcherNorm) {
+        # $null when the entry is not a tenetx-guard leaf or its key cannot be derived.
+        if ($null -eq $Entry -or -not $Entry.PSObject -or -not $Entry.PSObject.Properties[$cmdProp]) { return $null }
+        $raw = [string]$Entry.$cmdProp
+        $decoded = Get-DecodedCommand $raw
+        if (-not (Test-EndsWithTenetxGuard $raw) -and -not (Test-EndsWithTenetxGuard $decoded)) { return $null }
+        try {
+            $guardPath = Get-GuardPathFromDecoded $decoded $FallbackGuard
+            if ([string]::IsNullOrWhiteSpace($guardPath)) { $guardPath = $FallbackGuard }
+            $guardPath = $guardPath -replace '/', '\'
+            $guardPath = $guardPath -replace '\\\\+', '\'
+            $eventTok = $null
+            if ($AgentName -eq 'copilot') {
+                $eventTok = Get-CopilotEventToken $decoded
+                if (-not $eventTok) { $eventTok = Get-CopilotEventToken $raw }
+            }
+            $expected = New-ExpectedCommand -AgentName $AgentName -GuardPath $guardPath -EventToken $eventTok
+            return "$MatcherNorm`t$expected"
+        } catch {
+            # Cannot derive identity — leave the entry alone.
+            return $null
+        }
+    }
+
+    foreach ($prop in @($HooksNode.PSObject.Properties)) {
+        if ($prop.Name -in @($cmdProp, 'hooks', 'type', 'timeout', 'matcher', 'failClosed')) { continue }
+        $val = $prop.Value
+        if ($null -eq $val -or $val -is [string]) { continue }
+        $isArray = $val -is [System.Collections.IEnumerable] -and -not ($val -is [System.Collections.IDictionary]) -and -not ($val -is [pscustomobject])
+        if (-not $isArray -and -not (Test-IsHookLeafOrGroup $val)) { continue }
+
+        $groups = ConvertTo-ArraySafe $val
+        $seen = @{}
+        $seenWhere = @{}
+        $kept = [System.Collections.Generic.List[object]]::new()
+
+        for ($i = 0; $i -lt $groups.Count; $i++) {
+            $group = $groups[$i]
+            if ($null -eq $group -or -not $group.PSObject) { $kept.Add($group); continue }
+
+            if ($group.PSObject.Properties[$cmdProp]) {
+                # Flat leaf (copilot shape: entry has command/bash directly)
+                $key = Get-GuardIdentityKey $group ''
+                if ($null -eq $key) { $kept.Add($group); continue }
+                if ($seen.ContainsKey($key)) {
+                    $changes.Add([pscustomobject]@{
+                        Path   = "hooks.$($prop.Name)[$i]"
+                        Action = 'dedupe'
+                        Before = [string]$group.$cmdProp
+                        After  = ''
+                        Reason = "duplicate-of $($seenWhere[$key])"
+                    }) | Out-Null
+                } else {
+                    $seen[$key] = $true
+                    $seenWhere[$key] = "hooks.$($prop.Name)[$i]"
+                    $kept.Add($group)
+                }
+                continue
+            }
+
+            if ($group.PSObject.Properties['hooks']) {
+                # Matcher group: walk inner leaves in order
+                $matcherNorm = ''
+                if ($group.PSObject.Properties['matcher']) { $matcherNorm = [string]$group.matcher }
+                $inner = ConvertTo-ArraySafe $group.hooks
+                $innerKept = [System.Collections.Generic.List[object]]::new()
+                $innerGuard = 0
+                for ($j = 0; $j -lt $inner.Count; $j++) {
+                    $leaf = $inner[$j]
+                    $key = Get-GuardIdentityKey $leaf $matcherNorm
+                    if ($null -eq $key) { $innerKept.Add($leaf); continue }
+                    $innerGuard++
+                    if ($seen.ContainsKey($key)) {
+                        $changes.Add([pscustomobject]@{
+                            Path   = "hooks.$($prop.Name)[$i].hooks[$j]"
+                            Action = 'dedupe'
+                            Before = [string]$leaf.$cmdProp
+                            After  = ''
+                            Reason = "duplicate-of $($seenWhere[$key])"
+                        }) | Out-Null
+                    } else {
+                        $seen[$key] = $true
+                        $seenWhere[$key] = "hooks.$($prop.Name)[$i].hooks[$j]"
+                        $innerKept.Add($leaf)
+                    }
+                }
+                if ($innerGuard -gt 0 -and $innerKept.Count -eq 0) {
+                    # Every inner leaf was a duplicate guard → drop the whole group.
+                } elseif ($innerKept.Count -ne $inner.Count) {
+                    if ($Mutate) { $group.hooks = [object[]]$innerKept.ToArray() }
+                    $kept.Add($group)
+                } else {
+                    $kept.Add($group)
+                }
+                continue
+            }
+
+            $kept.Add($group)
+        }
+
+        if ($kept.Count -ne $groups.Count) {
+            if ($Mutate) { $HooksNode.$($prop.Name) = [object[]]$kept.ToArray() }
+        }
+    }
+
+    return $changes
+}
+
 function Assert-RootIsObject([string]$JsonText) {
     $trim = $JsonText.TrimStart()
     if ($trim.StartsWith('[')) {
@@ -631,71 +802,122 @@ function Write-RestoreInstructions([string]$Path, [string]$BackupPath) {
     Write-Info ""
 }
 
+function Get-GitBashPath {
+    # TENETX_FIX_HOOKS_BASH is authoritative when set: tests use it to force the
+    # bash-missing path (a set-but-nonexistent value → $null, no fallback).
+    if (-not [string]::IsNullOrWhiteSpace($env:TENETX_FIX_HOOKS_BASH)) {
+        if (Test-Path -LiteralPath $env:TENETX_FIX_HOOKS_BASH) { return $env:TENETX_FIX_HOOKS_BASH }
+        return $null
+    }
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) {
+        $candidates.Add("$env:ProgramFiles\Git\bin\bash.exe")
+    }
+    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
+        $candidates.Add("${env:ProgramFiles(x86)}\Git\bin\bash.exe")
+    }
+    $candidates.Add('C:\Program Files\Git\bin\bash.exe')
+    $fromPath = (Get-Command bash.exe -ErrorAction SilentlyContinue).Source
+    if ($fromPath) { $candidates.Add($fromPath) }
+    foreach ($c in $candidates) {
+        if (Test-Path -LiteralPath $c) { return $c }
+    }
+    return $null
+}
+
+function New-SmokePayloadFile {
+    # Temp payload file: env override if set and readable, else built-in constant.
+    $p = Join-Path ([System.IO.Path]::GetTempPath()) ("tx-fix-hooks-payload-" + [guid]::NewGuid().ToString('N') + '.json')
+    if (-not [string]::IsNullOrWhiteSpace($env:TENETX_FIX_HOOKS_PAYLOAD) -and (Test-Path -LiteralPath $env:TENETX_FIX_HOOKS_PAYLOAD)) {
+        Copy-Item -LiteralPath $env:TENETX_FIX_HOOKS_PAYLOAD -Destination $p -Force
+    } else {
+        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($p, $SmokePayloadJson, $utf8NoBom)
+    }
+    return $p
+}
+
 function Invoke-GuardSmoke {
     param(
         [Parameter(Mandatory)][string]$DecodedCommand,
-        [string]$PayloadPath = $DefaultPayload
+        [int]$TimeoutMs = 60000
     )
 
-    $payloadWin = $DefaultPayloadWin
-    if (-not (Test-Path -LiteralPath $payloadWin)) {
-        Write-WarnMsg "Verify payload missing: $payloadWin — skipping bash smoke for this entry."
-        return [pscustomobject]@{ Ok = $true; Skipped = $true; ExitCode = $null; Note = 'payload-missing' }
-    }
-    if (-not (Test-Path -LiteralPath $GitBash)) {
-        Write-WarnMsg "Git bash not found at $GitBash — skipping bash smoke."
-        return [pscustomobject]@{ Ok = $true; Skipped = $true; ExitCode = $null; Note = 'bash-missing' }
+    # Runs the DECODED command string through Git Bash exactly as Claude Code
+    # does on Windows: write a temp .sh whose body is the (already-quoted)
+    # command with the payload redirected from a file, run `bash <script>`.
+    # Never build nested-quote -c "..." argv — Windows argv parsing collapses
+    # the quotes (root cause of the old exit=127).
+    $bashPath = Get-GitBashPath
+    if (-not $bashPath) {
+        Write-WarnMsg "Git bash not found (TENETX_FIX_HOOKS_BASH, Program Files, PATH) — skipping bash smoke."
+        return [pscustomobject]@{ Ok = $true; Skipped = $true; ExitCode = $null; Note = 'bash-missing'; StdOut = ''; StdErr = ''; Warned = $false }
     }
 
-    # decoded may be: "C:\path\tenetx-guard.cmd"  or  "C:\path\tenetx-guard.cmd" event
-    # For bash -c we need a shell-safe form. Use the path without outer quotes for -c body.
-    $cmdForBash = $DecodedCommand
-    # Convert Windows path to something bash can run via cmd.exe /c is safer for .cmd
-    # Spec: bash -c '<decoded_command>' < payload
-    # decoded_command with quotes: "C:\...\tenetx-guard.cmd"
-    # Git bash can run .cmd via cmd //c
-    $inner = $DecodedCommand.Trim()
-    # Build: cmd //c <decoded>  so .cmd runs under cmd, stdin still redirected by bash
-    # Spec literally: bash -c '<decoded_command>' < payload.json
-    $bashC = $inner.Replace("'", "'\''")
+    $payloadPath = $null
+    $tmpSh = $null
+    try {
+        $payloadPath = New-SmokePayloadFile
+        $tmpSh = Join-Path ([System.IO.Path]::GetTempPath()) ("tx-fix-hooks-smoke-" + [guid]::NewGuid().ToString('N') + '.sh')
+        $cmdUnix = $DecodedCommand.Trim() -replace '\\', '/'
+        $payloadUnix = $payloadPath -replace '\\', '/'
+        $body = "export MSYS_NO_PATHCONV=1`n$cmdUnix < `"$payloadUnix`"`necho EXIT:`$?`n"
+        $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+        [System.IO.File]::WriteAllText($tmpSh, $body, $utf8NoBom)
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $GitBash
-    $psi.Arguments = "-c `"$bashC`" < `"$PayloadPath`""
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $bashPath
+        $psi.Arguments = "`"$tmpSh`""
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        # Redirect stdin and close it: an inherited console stdin can hang the
+        # child even when the payload comes from a file redirect.
+        $psi.RedirectStandardInput = $true
+        $psi.CreateNoWindow = $true
 
-    $p = New-Object System.Diagnostics.Process
-    $p.StartInfo = $psi
-    [void]$p.Start()
-    $stdout = $p.StandardOutput.ReadToEnd()
-    $stderr = $p.StandardError.ReadToEnd()
-    $p.WaitForExit(60000) | Out-Null
-    if (-not $p.HasExited) {
-        try { $p.Kill() } catch { }
-        return [pscustomobject]@{ Ok = $false; Skipped = $false; ExitCode = -1; Note = 'timeout'; StdOut = $stdout; StdErr = $stderr }
-    }
-    $code = $p.ExitCode
-    $ok = $code -in 0, 2
-    if ($ok) {
-        # Decision body may be missing under 401 API; warn but do not fail
-        $hasDecision = $false
-        if ($stdout -match '(?i)"(decision|permissionDecision|hookSpecificOutput)"') {
-            $hasDecision = $true
+        $p = New-Object System.Diagnostics.Process
+        $p.StartInfo = $psi
+        [void]$p.Start()
+        try { $p.StandardInput.Close() } catch { }
+        $stdout = $p.StandardOutput.ReadToEnd()
+        $stderr = $p.StandardError.ReadToEnd()
+        if (-not $p.WaitForExit($TimeoutMs)) {
+            try { $p.Kill() } catch { }
+            return [pscustomobject]@{ Ok = $false; Skipped = $false; ExitCode = -1; Note = 'timeout'; StdOut = $stdout; StdErr = $stderr; Warned = $false }
         }
-        if (-not $hasDecision) {
-            Write-WarnMsg "Guard exit $code but decision body missing (API 401 expected). Not failing."
+
+        # Prefer EXIT:<n> captured from the script (bash's own exit is always 0
+        # because the trailing `echo EXIT:$?` succeeds even when the command fails).
+        $code = $p.ExitCode
+        $m = [regex]::Match($stdout, 'EXIT:(\d+)\s*$')
+        if ($m.Success) { $code = [int]$m.Groups[1].Value }
+        $stdoutClean = [regex]::Replace($stdout, 'EXIT:\d+\s*$', '')
+
+        $firstErr = ($stderr -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+
+        # 126/127: the command string itself is not executable — hard failure.
+        if ($code -in 126, 127) {
+            if ($firstErr) { Write-WarnMsg "smoke stderr: $firstErr" }
+            return [pscustomobject]@{ Ok = $false; Skipped = $false; ExitCode = $code; Note = "not-runnable-$code"; StdOut = $stdoutClean; StdErr = $stderr; Warned = $false }
         }
-    }
-    return [pscustomobject]@{
-        Ok       = $ok
-        Skipped  = $false
-        ExitCode = $code
-        Note     = if ($ok) { 'ok' } else { "exit-$code" }
-        StdOut   = $stdout
-        StdErr   = $stderr
+
+        if ($code -in 0, 2) {
+            # Decision body may be missing under 401 API; warn but do not fail
+            $hasDecision = $stdoutClean -match '(?i)"(decision|permissionDecision|hookSpecificOutput)"'
+            if (-not $hasDecision) {
+                Write-WarnMsg "Guard exit $code but decision body missing (API 401 expected). Not failing."
+            }
+            return [pscustomobject]@{ Ok = $true; Skipped = $false; ExitCode = $code; Note = 'ok'; StdOut = $stdoutClean; StdErr = $stderr; Warned = (-not $hasDecision) }
+        }
+
+        # Any other exit: the guard runtime failed (missing Python, 401, fail-open),
+        # not the command string. The rewrite is fine — warn, do not fail.
+        if ($firstErr) { Write-WarnMsg "smoke stderr: $firstErr" }
+        return [pscustomobject]@{ Ok = $true; Skipped = $false; ExitCode = $code; Note = "guard-exit-$code"; StdOut = $stdoutClean; StdErr = $stderr; Warned = $true }
+    } finally {
+        if ($tmpSh) { Remove-Item -LiteralPath $tmpSh -Force -ErrorAction SilentlyContinue }
+        if ($payloadPath) { Remove-Item -LiteralPath $payloadPath -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -704,7 +926,8 @@ function Process-AgentFile {
         [Parameter(Mandatory)]$Meta,
         [switch]$DoApply,
         [switch]$DoDryRun,
-        [switch]$DoVerify
+        [switch]$DoVerify,
+        [switch]$NoDedupe
     )
 
     $path = $Meta.Path
@@ -739,9 +962,15 @@ function Process-AgentFile {
     $structureNeedsFix = Test-HooksNeedArrayNormalization $root.hooks
     Repair-HooksArrays $root.hooks
 
+    $foreignBefore = Get-ForeignCommandCount $root.hooks $Meta.Shape
+
     $planned = Walk-HooksSubtree -HooksNode $root.hooks -AgentName $name `
         -FallbackGuard $Meta.GuardCmd -Shape $Meta.Shape
-
+    $plannedDupes = if ($NoDedupe) { @() } else {
+        Remove-DuplicateGuardEntries -HooksNode $root.hooks -AgentName $name `
+            -FallbackGuard $Meta.GuardCmd -Shape $Meta.Shape
+    }
+    $dupeCount = @($plannedDupes).Count
     $rewriteCount = @($planned | Where-Object { $_.Action -eq 'rewrite' }).Count
     $skipCount = @($planned | Where-Object { $_.Action -eq 'skip' }).Count
 
@@ -751,30 +980,41 @@ function Process-AgentFile {
         Write-Info "    before: $($c.Before)"
         Write-Info "    after:  $($c.After)"
     }
-    Write-Info "  summary: rewrite=$rewriteCount skip=$skipCount"
+    foreach ($d in $plannedDupes) {
+        Write-Info "  [DEDUPE] $($d.Path)"
+        Write-Info "    remove: $($d.Before)"
+        Write-Info "    kept:   $($d.Reason)"
+    }
+    Write-Info "  summary: rewrite=$rewriteCount skip=$skipCount dedupe=$dupeCount"
     if ($structureNeedsFix) { Write-Info "  structure: event/hooks objects need array normalization" }
 
     if ($DoDryRun -or -not $DoApply) {
-        if ($rewriteCount -gt 0 -or $structureNeedsFix) {
-            Write-Info "  DRY-RUN: would write (rewrite=$rewriteCount structureFix=$structureNeedsFix)."
+        if ($rewriteCount -gt 0 -or $structureNeedsFix -or $dupeCount -gt 0) {
+            Write-Info "  DRY-RUN: would write (rewrite=$rewriteCount structureFix=$structureNeedsFix dedupe=$dupeCount)."
         } else {
             Write-Info "  DRY-RUN: no changes needed."
         }
-        return [pscustomobject]@{ Agent = $name; Status = 'dry-run'; Changes = $rewriteCount; StructureFix = $structureNeedsFix; Planned = $planned }
+        return [pscustomobject]@{ Agent = $name; Status = 'dry-run'; Changes = $rewriteCount; Dupes = $dupeCount; StructureFix = $structureNeedsFix; Planned = $planned }
     }
 
-    if ($rewriteCount -eq 0 -and -not $structureNeedsFix) {
+    if ($rewriteCount -eq 0 -and -not $structureNeedsFix -and $dupeCount -eq 0) {
         Write-Ok "  Already idempotent — no write needed."
         if ($DoVerify) {
-            Invoke-PostWriteVerify -Path $path -Meta $Meta -NonHooksHashBefore $nonHooksHashBefore -ExpectRewrite $false | Out-Null
+            Invoke-PostWriteVerify -Path $path -Meta $Meta -NonHooksHashBefore $nonHooksHashBefore `
+                -ForeignBefore $foreignBefore -NoDedupe:$NoDedupe -ExpectRewrite $false | Out-Null
         }
-        return [pscustomobject]@{ Agent = $name; Status = 'noop'; Changes = 0 }
+        return [pscustomobject]@{ Agent = $name; Status = 'noop'; Changes = 0; Dupes = 0 }
     }
 
     # Mutate for real
     $null = Walk-HooksSubtree -HooksNode $root.hooks -AgentName $name `
         -FallbackGuard $Meta.GuardCmd -Shape $Meta.Shape -Mutate
     Repair-HooksArrays $root.hooks
+    if (-not $NoDedupe) {
+        $null = Remove-DuplicateGuardEntries -HooksNode $root.hooks -AgentName $name `
+            -FallbackGuard $Meta.GuardCmd -Shape $Meta.Shape -Mutate
+        Repair-HooksArrays $root.hooks
+    }
 
     # Non-hooks hash must still match before serialize
     $nonHooksAfterMut = Get-NonHooksClone $root
@@ -801,14 +1041,21 @@ function Process-AgentFile {
 
     Write-Ok "  Wrote: $path"
 
+    $smokeNote = $null
     if ($DoVerify) {
-        $vr = Invoke-PostWriteVerify -Path $path -Meta $Meta -NonHooksHashBefore $nonHooksHashBefore -ExpectRewrite $true
+        $vr = Invoke-PostWriteVerify -Path $path -Meta $Meta -NonHooksHashBefore $nonHooksHashBefore `
+            -ForeignBefore $foreignBefore -NoDedupe:$NoDedupe -ExpectRewrite $true
         if (-not $vr.Ok) {
-            throw "Post-write verify failed for $path : $($vr.Note)"
+            Write-ErrMsg "verify failed ($($vr.Class)): $($vr.Note)"
+            Write-Info "  Revert with: pwsh -NoProfile -File fix-agent-hooks.ps1 -Revert -Agents $name"
+            return [pscustomobject]@{ Agent = $name; Status = 'verify-failed'; Changes = $rewriteCount;
+                Dupes = $dupeCount; Backup = $bak; Error = "$($vr.Class): $($vr.Note)" }
         }
+        if ($vr.Note -like 'smoke-warn*') { $smokeNote = $vr.Note }
     }
 
-    return [pscustomobject]@{ Agent = $name; Status = 'applied'; Changes = $rewriteCount; StructureFix = $structureNeedsFix; Backup = $bak }
+    return [pscustomobject]@{ Agent = $name; Status = 'applied'; Changes = $rewriteCount; Dupes = $dupeCount;
+        StructureFix = $structureNeedsFix; Backup = $bak; SmokeNote = $smokeNote }
 }
 
 function Invoke-PostWriteVerify {
@@ -816,33 +1063,61 @@ function Invoke-PostWriteVerify {
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)]$Meta,
         [Parameter(Mandatory)][string]$NonHooksHashBefore,
+        [Parameter(Mandatory)][int]$ForeignBefore,
+        [bool]$NoDedupe = $false,
         [bool]$ExpectRewrite = $true
     )
 
     Write-Info "  VERIFY: re-parse $Path"
     $text = Get-Content -LiteralPath $Path -Raw -Encoding utf8
-    Assert-RootIsObject $text
+    try {
+        Assert-RootIsObject $text
+    } catch {
+        return [pscustomobject]@{ Ok = $false; Class = 'structural'; Note = "root-not-object: $_" }
+    }
     $root = $text | ConvertFrom-Json
     if ($root -is [System.Array]) {
-        return [pscustomobject]@{ Ok = $false; Note = 'root-is-array' }
+        return [pscustomobject]@{ Ok = $false; Class = 'structural'; Note = 'root-is-array' }
     }
 
     $nonHooks = Get-NonHooksClone $root
     $h = Get-ObjectSha256 $nonHooks
     if ($h -ne $NonHooksHashBefore) {
-        return [pscustomobject]@{ Ok = $false; Note = "non-hooks-hash-mismatch before=$NonHooksHashBefore after=$h" }
+        return [pscustomobject]@{ Ok = $false; Class = 'structural'; Note = "non-hooks-hash-mismatch before=$NonHooksHashBefore after=$h" }
     }
     Write-Ok "  VERIFY: non-hooks SHA256 unchanged ($h)"
 
-    Assert-TouchedArraysStillArrays $root.hooks $Meta.Shape
+    try {
+        Assert-TouchedArraysStillArrays $root.hooks $Meta.Shape
+    } catch {
+        return [pscustomobject]@{ Ok = $false; Class = 'structural'; Note = "arrays-changed: $_" }
+    }
 
     $changes = Walk-HooksSubtree -HooksNode $root.hooks -AgentName $Meta.Name `
         -FallbackGuard $Meta.GuardCmd -Shape $Meta.Shape
     $stillBad = @($changes | Where-Object { $_.Action -eq 'rewrite' })
     if ($stillBad.Count -gt 0) {
-        return [pscustomobject]@{ Ok = $false; Note = "still-unquoted count=$($stillBad.Count)" }
+        return [pscustomobject]@{ Ok = $false; Class = 'structural'; Note = "still-unquoted count=$($stillBad.Count)" }
     }
     Write-Ok "  VERIFY: all tenetx-guard entries match quoted shape"
+
+    # Dedupe check: no two guard entries per event may share an identity.
+    if (-not $NoDedupe) {
+        $dupesLeft = Remove-DuplicateGuardEntries -HooksNode $root.hooks -AgentName $Meta.Name `
+            -FallbackGuard $Meta.GuardCmd -Shape $Meta.Shape
+        $dupesLeftCount = @($dupesLeft).Count
+        if ($dupesLeftCount -gt 0) {
+            return [pscustomobject]@{ Ok = $false; Class = 'structural'; Note = "duplicates-remain count=$dupesLeftCount" }
+        }
+        Write-Ok "  VERIFY: no duplicate tenetx-guard entries"
+    }
+
+    # Foreign hooks must be untouched in count.
+    $foreignAfter = Get-ForeignCommandCount $root.hooks $Meta.Shape
+    if ($foreignAfter -ne $ForeignBefore) {
+        return [pscustomobject]@{ Ok = $false; Class = 'structural'; Note = "foreign-hook-count-changed before=$ForeignBefore after=$foreignAfter" }
+    }
+    Write-Ok "  VERIFY: non-tenetx hook entries preserved ($ForeignBefore)"
 
     # Smoke one decoded command (first skip/rewrite after-shape)
     $sample = @($changes | Select-Object -First 1)
@@ -851,16 +1126,19 @@ function Invoke-PostWriteVerify {
         Write-Info "  VERIFY: bash smoke → $decoded"
         $smoke = Invoke-GuardSmoke -DecodedCommand $decoded
         if (-not $smoke.Ok) {
-            return [pscustomobject]@{ Ok = $false; Note = "smoke-fail exit=$($smoke.ExitCode)" }
+            return [pscustomobject]@{ Ok = $false; Class = 'smoke'; Note = "smoke-fail exit=$($smoke.ExitCode) $($smoke.Note)" }
         }
         if ($smoke.Skipped) {
             Write-WarnMsg "  VERIFY: smoke skipped ($($smoke.Note))"
+        } elseif ($smoke.Warned) {
+            Write-WarnMsg "  VERIFY: smoke warn (exit=$($smoke.ExitCode))"
+            return [pscustomobject]@{ Ok = $true; Class = 'ok'; Note = "smoke-warn exit=$($smoke.ExitCode)" }
         } else {
             Write-Ok "  VERIFY: smoke exit=$($smoke.ExitCode) (allowed 0|2)"
         }
     }
 
-    return [pscustomobject]@{ Ok = $true; Note = 'ok' }
+    return [pscustomobject]@{ Ok = $true; Class = 'ok'; Note = 'ok' }
 }
 
 function Invoke-RevertAgent {
@@ -905,12 +1183,13 @@ $failed = $false
 
 foreach ($agentName in $selected) {
     $meta = $AgentCatalog[$agentName]
+    $r = $null
     try {
         if ($Revert) {
             $r = Invoke-RevertAgent -Meta $meta
             $results.Add($r) | Out-Null
         } else {
-            $r = Process-AgentFile -Meta $meta -DoApply:$Apply -DoDryRun:$DryRun -DoVerify:$Verify
+            $r = Process-AgentFile -Meta $meta -DoApply:$Apply -DoDryRun:$DryRun -DoVerify:$Verify -NoDedupe:$NoDedupe
             $results.Add($r) | Out-Null
         }
     } catch {
@@ -918,6 +1197,7 @@ foreach ($agentName in $selected) {
         Write-ErrMsg "agent=$agentName failed: $_"
         $results.Add([pscustomobject]@{ Agent = $agentName; Status = 'error'; Error = "$_" }) | Out-Null
     }
+    if ($null -ne $r -and $r.Status -eq 'verify-failed') { $failed = $true }
 }
 
 Write-Info ""
@@ -927,7 +1207,15 @@ foreach ($r in $results) {
     if ($r.PSObject.Properties['Changes'] -and $null -ne $r.Changes) {
         $chg = $r.Changes
     }
-    Write-Info ("  {0,-8} {1} changes={2}" -f $r.Agent, $r.Status, $chg)
+    $dup = '-'
+    if ($r.PSObject.Properties['Dupes'] -and $null -ne $r.Dupes) {
+        $dup = $r.Dupes
+    }
+    $note = ''
+    if ($r.PSObject.Properties['SmokeNote'] -and $r.SmokeNote) {
+        $note = " ($($r.SmokeNote))"
+    }
+    Write-Info ("  {0,-8} {1} changes={2} dupes={3}{4}" -f $r.Agent, $r.Status, $chg, $dup, $note)
 }
 
 if ($failed) {

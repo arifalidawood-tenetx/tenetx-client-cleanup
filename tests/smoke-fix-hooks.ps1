@@ -27,7 +27,6 @@ $PayloadPath = Join-Path $ScratchDir 'payload.json'
 $GitBash = 'C:\Program Files\Git\bin\bash.exe'
 $RealClaudeGuard = Join-Path $env:USERPROFILE '.claude\hooks\tenetx-guard.cmd'
 $RealCursorGuard = Join-Path $env:USERPROFILE '.cursor\hooks\tenetx-guard.cmd'
-$RealPayloadSource = 'C:\Users\aadx3d\codes\tenetx-pms\.omo\scratch\windowstest-20260804\payload.json'
 
 $script:Pass = 0
 $script:Fail = 0
@@ -141,6 +140,101 @@ function Write-FixtureCursor([string]$SandboxRoot, [string]$Shape) {
     $path = Join-Path $SandboxRoot '.cursor\hooks.json'
     Set-Content -LiteralPath $path -Value ($obj | ConvertTo-Json -Depth 20) -Encoding utf8
     return $path
+}
+
+function Write-FixtureClaudeDupes([string]$SandboxRoot) {
+    # Duplicate-guard fixture: PreToolUse has quoted guard + foreign bun + bare
+    # guard (twin of the quoted one); SessionEnd has quoted guard (with timeout)
+    # + bare twin; SessionStart a single quoted guard (array-shape survival).
+    $guard = Join-Path $SandboxRoot '.claude\hooks\tenetx-guard.cmd'
+    $txQuoted = "`"$guard`""
+    $bun = 'C:\Users\fake\.bun\bin\bun.exe'
+    $worker = 'C:\Users\fake\.claude\plugins\worker-service.cjs'
+    $obj = [ordered]@{
+        schemaVersion = 1
+        unrelatedKey  = 'must-survive'
+        permissions   = @{ allow = @('Bash') }
+        hooks         = [ordered]@{
+            PreToolUse = @(
+                [ordered]@{
+                    matcher = '.*'
+                    hooks   = @([ordered]@{ type = 'command'; command = $txQuoted })
+                },
+                [ordered]@{
+                    matcher = '*'
+                    hooks   = @([ordered]@{ type = 'command'; command = "`"$bun`" `"$worker`" hook cursor file-edit" })
+                },
+                [ordered]@{
+                    matcher = '.*'
+                    hooks   = @([ordered]@{ type = 'command'; command = $guard })
+                }
+            )
+            SessionStart = @(
+                [ordered]@{
+                    matcher = '.*'
+                    hooks   = @([ordered]@{ type = 'command'; command = $txQuoted })
+                }
+            )
+            SessionEnd = @(
+                [ordered]@{
+                    hooks    = @([ordered]@{ type = 'command'; command = $txQuoted })
+                    timeout  = 5
+                },
+                [ordered]@{
+                    hooks = @([ordered]@{ type = 'command'; command = $guard })
+                }
+            )
+        }
+    }
+    $path = Join-Path $SandboxRoot '.claude\settings.json'
+    Set-Content -LiteralPath $path -Value ($obj | ConvertTo-Json -Depth 20) -Encoding utf8
+    return $path
+}
+
+function Write-FixtureCopilotDupes([string]$SandboxRoot) {
+    # Copilot duplicate-guard fixture: every event holds two byte-identical
+    # quoted guard entries (the live file's shape after a rewrite + re-login).
+    $guard = Join-Path $SandboxRoot '.copilot\hooks\tenetx-guard.cmd'
+    $obj = [ordered]@{
+        version = 1
+        meta    = @{ keep = $true }
+        hooks   = [ordered]@{
+            preToolUse = @(
+                [ordered]@{ type = 'command'; bash = "`"$guard`" preToolUse" },
+                [ordered]@{ type = 'command'; bash = "`"$guard`" preToolUse" }
+            )
+            postToolUse = @(
+                [ordered]@{ type = 'command'; bash = "`"$guard`" postToolUse" },
+                [ordered]@{ type = 'command'; bash = "`"$guard`" postToolUse" }
+            )
+        }
+    }
+    $path = Join-Path $SandboxRoot '.copilot\hooks\notification-hooks.json'
+    Set-Content -LiteralPath $path -Value ($obj | ConvertTo-Json -Depth 20) -Encoding utf8
+    return $path
+}
+
+function Get-GuardCountPerEvent([string]$JsonPath, [string]$CmdProp = 'command') {
+    # Returns a hashtable event-name -> number of tenetx-guard leaves under it.
+    $root = Get-Content -LiteralPath $JsonPath -Raw -Encoding utf8 | ConvertFrom-Json
+    $result = @{}
+    foreach ($p in $root.hooks.PSObject.Properties) {
+        $count = 0
+        foreach ($group in @($p.Value)) {
+            if ($null -eq $group) { continue }
+            if ($group.PSObject.Properties[$CmdProp]) {
+                if ([string]$group.$CmdProp -match 'tenetx-guard\.cmd') { $count++ }
+            }
+            if ($group.PSObject.Properties['hooks']) {
+                foreach ($leaf in @($group.hooks)) {
+                    if ($null -eq $leaf) { continue }
+                    if ($leaf.PSObject.Properties[$CmdProp] -and [string]$leaf.$CmdProp -match 'tenetx-guard\.cmd') { $count++ }
+                }
+            }
+        }
+        $result[$p.Name] = $count
+    }
+    return $result
 }
 
 function Invoke-Fix {
@@ -275,14 +369,10 @@ function Invoke-RealGuardBash {
 }
 
 # ---------------------------------------------------------------------------
-# SCRATCH payload
+# SCRATCH payload (self-contained — no machine-specific paths)
 # ---------------------------------------------------------------------------
 New-Item -ItemType Directory -Path $ScratchDir -Force | Out-Null
-if (Test-Path -LiteralPath $RealPayloadSource) {
-    Copy-Item -LiteralPath $RealPayloadSource -Destination $PayloadPath -Force
-} else {
-    Set-Content -LiteralPath $PayloadPath -Value '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"}}' -Encoding utf8
-}
+Set-Content -LiteralPath $PayloadPath -Value '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"}}' -Encoding utf8
 
 if (-not (Test-Path -LiteralPath $FixScript)) {
     Write-Fail "fix-agent-hooks.ps1 missing: $FixScript"
@@ -605,6 +695,141 @@ try {
         } else {
             Write-Fail "env-revert: exit=$($rr.ExitCode) shaBefore=$before shaAfter=$after`n$($rr.Output)"
         }
+    }
+} finally {
+    Remove-Item -LiteralPath $SandboxRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 6e) Claude duplicate-guard dedupe: twin entries collapse, foreign hooks survive
+$SandboxRoot = New-SandboxRoot
+try {
+    $claude = Write-FixtureClaudeDupes -SandboxRoot $SandboxRoot
+    $r = Invoke-Fix -SandboxRoot $SandboxRoot -ArgsExtra @('-Apply', '-Agents', 'claude')
+    if ($r.ExitCode -ne 0) {
+        Write-Fail "claude-dedupe: apply exit=$($r.ExitCode)`n$($r.Output)"
+    } else {
+        Write-Pass 'claude-dedupe: apply exit 0'
+    }
+    $counts = Get-GuardCountPerEvent $claude 'command'
+    $ok = $true
+    foreach ($ev in @('PreToolUse', 'SessionStart', 'SessionEnd')) {
+        if ($counts[$ev] -ne 1) {
+            $ok = $false
+            Write-Fail "claude-dedupe: event $ev guard-count=$($counts[$ev]) expected 1"
+        }
+    }
+    if ($ok) { Write-Pass 'claude-dedupe: exactly one guard leaf per event' }
+
+    $cmds = @(Get-CommandValues $claude)
+    $bun = @($cmds | Where-Object { $_ -match 'bun' })
+    if (@($bun).Count -eq 1) {
+        Write-Pass 'claude-dedupe: foreign bun group still present'
+    } else {
+        Write-Fail "claude-dedupe: foreign bun count=$(@($bun).Count)"
+    }
+
+    $rootObj = Get-Content $claude -Raw | ConvertFrom-Json
+    $sessionEnd = @($rootObj.hooks.SessionEnd)
+    if ($sessionEnd.Count -eq 1 -and $sessionEnd[0].timeout -eq 5) {
+        Write-Pass 'claude-dedupe: SessionEnd kept the timeout=5 entry'
+    } else {
+        Write-Fail "claude-dedupe: SessionEnd shape wrong count=$($sessionEnd.Count)"
+    }
+
+    if ($r.Output -match '\[DEDUPE\]' -and $r.Output -match 'dedupe=2') {
+        Write-Pass 'claude-dedupe: output announces 2 dedupes'
+    } else {
+        Write-Fail "claude-dedupe: missing [DEDUPE]/dedupe=2 marker`n$($r.Output)"
+    }
+
+    if (Test-ArrayShapeSurvival $claude) {
+        Write-Pass 'claude-dedupe: event/nested arrays survive dedupe'
+    }
+
+    # Verify path must pass on the deduped file
+    $rv = Invoke-Fix -SandboxRoot $SandboxRoot -ArgsExtra @('-Apply', '-Verify', '-Agents', 'claude')
+    if ($rv.ExitCode -eq 0 -and $rv.Output -match 'VERIFY: no duplicate tenetx-guard entries' -and $rv.Output -match 'VERIFY: non-tenetx hook entries preserved') {
+        Write-Pass 'claude-dedupe: -Apply -Verify confirms dedupe + foreign preservation'
+    } else {
+        Write-Fail "claude-dedupe: verify failed exit=$($rv.ExitCode)`n$($rv.Output)"
+    }
+} finally {
+    Remove-Item -LiteralPath $SandboxRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 6f) Copilot dedupe + re-detection (regression for the vacuous-verify blindness)
+$SandboxRoot = New-SandboxRoot
+try {
+    $copilot = Write-FixtureCopilotDupes -SandboxRoot $SandboxRoot
+    $r = Invoke-Fix -SandboxRoot $SandboxRoot -ArgsExtra @('-Apply', '-Agents', 'copilot')
+    if ($r.ExitCode -ne 0) {
+        Write-Fail "copilot-dedupe: apply exit=$($r.ExitCode)`n$($r.Output)"
+    } else {
+        Write-Pass 'copilot-dedupe: apply exit 0'
+    }
+    $counts = Get-GuardCountPerEvent $copilot 'bash'
+    if ($counts['preToolUse'] -eq 1 -and $counts['postToolUse'] -eq 1) {
+        Write-Pass 'copilot-dedupe: one entry per event after apply'
+    } else {
+        Write-Fail "copilot-dedupe: counts=$($counts | ConvertTo-Json -Compress)"
+    }
+    # Second run must RECOGNISE the repaired quoted shape: skip=2, rewrite=0
+    $r2 = Invoke-Fix -SandboxRoot $SandboxRoot -ArgsExtra @('-Apply', '-Agents', 'copilot')
+    if ($r2.ExitCode -eq 0 -and $r2.Output -match 'rewrite=0' -and $r2.Output -match 'skip=2' -and $r2.Output -match 'dedupe=0') {
+        Write-Pass 'copilot-dedupe: re-run sees repaired shape (rewrite=0 skip=2 dedupe=0)'
+    } else {
+        Write-Fail "copilot-dedupe: re-run output`n$($r2.Output)"
+    }
+} finally {
+    Remove-Item -LiteralPath $SandboxRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 6g) -NoDedupe leaves duplicate guard entries alone
+$SandboxRoot = New-SandboxRoot
+try {
+    $claude = Write-FixtureClaudeDupes -SandboxRoot $SandboxRoot
+    $r = Invoke-Fix -SandboxRoot $SandboxRoot -ArgsExtra @('-Apply', '-NoDedupe', '-Agents', 'claude')
+    $counts = Get-GuardCountPerEvent $claude 'command'
+    if ($r.ExitCode -eq 0 -and $r.Output -notmatch '\[DEDUPE\]' -and $counts['PreToolUse'] -eq 2 -and $counts['SessionEnd'] -eq 2) {
+        Write-Pass 'no-dedupe: -NoDedupe keeps twins, no [DEDUPE] lines'
+    } else {
+        Write-Fail "no-dedupe: exit=$($r.ExitCode) PreToolUse=$($counts['PreToolUse']) SessionEnd=$($counts['SessionEnd'])`n$($r.Output)"
+    }
+} finally {
+    Remove-Item -LiteralPath $SandboxRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 6h) Real smoke through a sandboxed copy of the REAL guard
+if (-not (Test-Path -LiteralPath $GitBash) -or -not (Test-Path -LiteralPath $RealClaudeGuard)) {
+    Write-Host "SKIP real-smoke: git-bash ($GitBash) or real claude guard ($RealClaudeGuard) missing" -ForegroundColor Yellow
+} else {
+    $SandboxRoot = New-SandboxRoot
+    try {
+        $sandboxHooks = Join-Path $SandboxRoot '.claude\hooks'
+        Get-ChildItem -LiteralPath (Split-Path -Parent $RealClaudeGuard) -Filter 'tenetx-guard.*' -File |
+            Copy-Item -Destination $sandboxHooks -Force
+        $null = Write-FixtureClaude -SandboxRoot $SandboxRoot -GuardCmdShape 'bare'
+        $r = Invoke-Fix -SandboxRoot $SandboxRoot -ArgsExtra @('-Apply', '-Verify', '-Agents', 'claude')
+        if ($r.ExitCode -eq 0 -and $r.Output -match 'VERIFY: bash smoke' -and $r.Output -notmatch 'smoke-fail') {
+            Write-Pass 'real-smoke: verify executed the sandboxed real guard without smoke-fail'
+        } else {
+            Write-Fail "real-smoke: exit=$($r.ExitCode)`n$($r.Output)"
+        }
+    } finally {
+        Remove-Item -LiteralPath $SandboxRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# 6i) bash-missing skip: authoritative TENETX_FIX_HOOKS_BASH pointing nowhere
+$SandboxRoot = New-SandboxRoot
+try {
+    $null = Write-FixtureClaude -SandboxRoot $SandboxRoot -GuardCmdShape 'bare'
+    $r = Invoke-Fix -SandboxRoot $SandboxRoot -ArgsExtra @('-Apply', '-Verify', '-Agents', 'claude') `
+        -EnvExtra @{ TENETX_FIX_HOOKS_BASH = 'C:\nonexistent\bash.exe' }
+    if ($r.ExitCode -eq 0 -and $r.Output -match 'bash-missing' -and $r.Output -notmatch 'smoke-fail') {
+        Write-Pass 'bash-missing: verify skips smoke with bash-missing, run still exits 0'
+    } else {
+        Write-Fail "bash-missing: exit=$($r.ExitCode)`n$($r.Output)"
     }
 } finally {
     Remove-Item -LiteralPath $SandboxRoot -Recurse -Force -ErrorAction SilentlyContinue
