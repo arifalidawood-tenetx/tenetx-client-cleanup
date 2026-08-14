@@ -28,26 +28,26 @@ Inventory/wipe includes guard scripts under agent hooks dirs (`tenetx-guard.py` 
 **macOS / Linux — inventory:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/uninstall-complete.sh | sh
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/uninstall-complete.sh | sh
 ```
 
 **macOS / Linux — wipe:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/uninstall-complete.sh | sh -s -- --force
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/uninstall-complete.sh | sh -s -- --force
 ```
 
 **Windows — inventory:**
 
 ```powershell
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/uninstall-complete.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/uninstall-complete.ps1 | iex
 ```
 
 **Windows — wipe:**
 
 ```powershell
 $env:TENETX_FORCE = '1'
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/uninstall-complete.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/uninstall-complete.ps1 | iex
 ```
 
 ### Local clone
@@ -78,39 +78,39 @@ The baked default is usually `0` unless the org was in server `TENETX_CAPTURE_OR
 **macOS / Linux — enable:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/enable-agent-capture.sh | sh -s -- enable
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/enable-agent-capture.sh | sh -s -- enable
 ```
 
 **macOS / Linux — disable:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/enable-agent-capture.sh | sh -s -- disable
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/enable-agent-capture.sh | sh -s -- disable
 ```
 
 **macOS / Linux — status:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/enable-agent-capture.sh | sh -s -- status
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/enable-agent-capture.sh | sh -s -- status
 ```
 
 **Windows — enable:**
 
 ```powershell
 $env:TENETX_CAPTURE_ACTION = 'enable'
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/enable-agent-capture.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/enable-agent-capture.ps1 | iex
 ```
 
 **Windows — disable:**
 
 ```powershell
 $env:TENETX_CAPTURE_ACTION = 'disable'
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/enable-agent-capture.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/enable-agent-capture.ps1 | iex
 ```
 
 **Windows — status:**
 
 ```powershell
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.0/enable-agent-capture.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/enable-agent-capture.ps1 | iex
 ```
 
 ### Local clone
@@ -273,6 +273,7 @@ Requires PowerShell 7+, optional real install paths for decision-body assert (`t
 - **Duplicate-guard dedupe**: `-Apply` collapses duplicate TenetX guard entries per event (first wins, matcher-aware); foreign hooks (bun / orca etc.) are never touched and their count is verified. Opt out with `-NoDedupe` / `TENETX_FIX_HOOKS_DEDUPE=0`.
 - **Copilot repaired-shape detection**: recognises `"C:\...\tenetx-guard.cmd" eventToken` so re-runs report `skip=N` instead of `rewrite=0 skip=0`, and the guard smoke gets a real sample.
 - **Honest status**: a failed verify returns `verify-failed` (structural vs smoke class) instead of throwing and wiping the change count from the summary; guard runtime failures (exit ≠ 0/2/126/127) are warnings, not run failures.
+- **Full asset suite**: `uninstall-complete.sh` / `.ps1` and `enable-agent-capture.sh` / `.ps1` published alongside `fix-agent-hooks.ps1`; all release scripts are LF line-terminated (see `tests/smoke-crlf.sh`).
 
 ```powershell
 # Dry-run

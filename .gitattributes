@@ -1,0 +1,15 @@
+# Normalize line endings in the repository.
+# Source files are stored as LF in git; working-tree checkouts must not
+# introduce CRLF (which corrupts release assets uploaded as-is, e.g. *.sh).
+* text=auto
+
+# Shell scripts must always be LF on every platform.
+*.sh text eol=lf
+
+# PowerShell scripts are ASCII/LF-safe; keep them LF too.
+*.ps1 text eol=lf
+
+# Release-critical scripts: treat as text; do not let git smudge them.
+uninstall-complete.sh text eol=lf
+enable-agent-capture.sh text eol=lf
+fix-agent-hooks.ps1 text eol=lf
