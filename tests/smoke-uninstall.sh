@@ -101,6 +101,15 @@ EOF
   cat > "$sandbox/.codeium/windsurf/hooks.json" <<EOF
 {"hooks":{"pre_run_command":[{"command":"$sandbox/.windsurf/hooks/tenetx-guard.sh"},{"command":"user.sh"}]}}
 EOF
+  # Legacy wiring older builds wrote outside the real settings file. mcp.json
+  # carries a `hooks` key AND mcpServers: the hooks key is ours, the servers
+  # are the user's.
+  cat > "$sandbox/.windsurf/settings.json" <<EOF
+{"hooks":{"pre_run_command":[{"command":"$sandbox/.windsurf/hooks/tenetx-guard.sh"},{"command":"user.sh"}]}}
+EOF
+  cat > "$sandbox/.windsurf/mcp.json" <<EOF
+{"hooks":{"pre_run_command":[{"command":"$sandbox/.windsurf/hooks/tenetx-guard.sh"}]},"mcpServers":{"mine":{}}}
+EOF
   cat > "$sandbox/.config/devin/config.json" <<EOF
 {"version":1,"model":"x","hooks":{"PreToolUse":[{"matcher":".*","hooks":[{"type":"command","command":"$sandbox/.windsurf/hooks/tenetx-guard.sh"}]},{"matcher":".*","hooks":[{"type":"command","command":"user.sh"}]}]}}
 EOF
@@ -293,6 +302,12 @@ test_wipe_keep_binary() {
   ck_nogrep "augment hook wiring scrubbed" "$sandbox/.augment/settings.json" 'tenetx-guard'
   ck_nogrep "windsurf codeium wiring scrubbed" "$sandbox/.codeium/windsurf/hooks.json" 'tenetx-guard'
   ck_nogrep "devin config wiring scrubbed" "$sandbox/.config/devin/config.json" 'tenetx-guard'
+  ck_nogrep "windsurf legacy settings scrubbed" "$sandbox/.windsurf/settings.json" 'tenetx-guard'
+  ck_nogrep "windsurf legacy mcp hooks key scrubbed" "$sandbox/.windsurf/mcp.json" 'tenetx-guard'
+  ck_grep "windsurf legacy mcp keeps mcpServers" "$sandbox/.windsurf/mcp.json" '"mine"'
+  ck_grep "windsurf legacy settings keeps user hook" "$sandbox/.windsurf/settings.json" 'user.sh'
+  # our own rollback backup is deliberately kept, never swept
+  ck_stay "operator rollback backup preserved" "$sandbox/.windsurf/settings.json.tenetx-complete-uninstall-backup"
   ck_nogrep "gemini top-level key scrubbed" "$sandbox/.gemini/config/hooks.json" 'tenetx-guard'
   ck_nogrep "hermes managed block stripped" "$sandbox/.hermes/config.yaml" 'TENETX GUARD'
   ck_nogrep "hermes allowlist scrubbed" "$sandbox/.hermes/shell-hooks-allowlist.json" 'tenetx-guard'
