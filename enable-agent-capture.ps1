@@ -222,6 +222,13 @@ function Get-GuardInstalls {
         [pscustomobject]@{ Label = 'claude';  Path = (Join-Path $homeDir '.claude/hooks/tenetx-guard.py') }
         [pscustomobject]@{ Label = 'cursor';  Path = (Join-Path $homeDir '.cursor/hooks/tenetx-guard.py') }
         [pscustomobject]@{ Label = 'copilot'; Path = (Join-Path $homeDir '.copilot/hooks/tenetx-guard.py') }
+        [pscustomobject]@{ Label = 'windsurf'; Path = (Join-Path $homeDir '.windsurf/hooks/tenetx-guard.py') }
+        [pscustomobject]@{ Label = 'antigravity'; Path = (Join-Path $homeDir '.antigravity/hooks/tenetx-guard.py') }
+        [pscustomobject]@{ Label = 'qwen_code'; Path = (Join-Path $homeDir '.qwen/hooks/tenetx-guard.py') }
+        [pscustomobject]@{ Label = 'hermes'; Path = (Join-Path $homeDir '.hermes/hooks/tenetx-guard.py') }
+        [pscustomobject]@{ Label = 'augment_code'; Path = (Join-Path $homeDir '.augment/hooks/tenetx-guard.py') }
+        [pscustomobject]@{ Label = 'kiro'; Path = (Join-Path $homeDir '.kiro/hooks/tenetx-guard.py') }
+        [pscustomobject]@{ Label = 'vibe_code'; Path = (Join-Path $homeDir '.vibe/hooks/tenetx-guard.py') }
     )
 }
 

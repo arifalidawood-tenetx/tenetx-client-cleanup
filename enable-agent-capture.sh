@@ -378,7 +378,7 @@ action_status() {
   # Guard hooks scanning
   printf '\nGuard Hooks:\n'
   local guard_found=0
-  local guard_paths="$HOME/.claude/hooks/tenetx-guard.py $HOME/.cursor/hooks/tenetx-guard.py $HOME/.windsurf/hooks/tenetx-guard.py $HOME/.tenetx/hooks/codex/tenetx-guard.py $HOME/.copilot/hooks/tenetx-guard.py"
+  local guard_paths="$HOME/.claude/hooks/tenetx-guard.py $HOME/.cursor/hooks/tenetx-guard.py $HOME/.windsurf/hooks/tenetx-guard.py $HOME/.tenetx/hooks/codex/tenetx-guard.py $HOME/.copilot/hooks/tenetx-guard.py $HOME/.antigravity/hooks/tenetx-guard.py $HOME/.qwen/hooks/tenetx-guard.py $HOME/.hermes/hooks/tenetx-guard.py $HOME/.augment/hooks/tenetx-guard.py $HOME/.kiro/hooks/tenetx-guard.py $HOME/.tenetx/hooks/cline/tenetx-guard.py $HOME/.vibe/hooks/tenetx-guard.py"
   
   for guard_path in $guard_paths; do
     if [ -f "$guard_path" ]; then

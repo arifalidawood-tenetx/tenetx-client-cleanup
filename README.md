@@ -23,31 +23,33 @@ Removes TenetX client artifacts beyond the product's built-in uninstall.
 
 Inventory/wipe includes guard scripts under agent hooks dirs (`tenetx-guard.py` / `.sh` / `.cmd` / `.ps1`) and other `tenetx-*` residue file names. Does **not** touch product-repo `local-stacks/` mirrors.
 
-### One-liners (release v1.3.0)
+**Covered agents (all 12 the CLI installs)** — `claude_code`, `codex`, `cursor`, `copilot`, `windsurf` (incl. Devin Local `~/.config/devin/config.json`), `antigravity`, `qwen_code`, `hermes`, `augment_code`, `kiro`, `cline` (macOS/Linux), `vibe_code`. Also removes `run.sh build-cli` residue: the `~/.local/bin` `# >>> TENETX_CLI_PATH >>>` PATH block and `tenetx*.bak`.
+
+### One-liners (release v1.4.0)
 
 **macOS / Linux — inventory:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/uninstall-complete.sh | sh
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/uninstall-complete.sh | sh
 ```
 
 **macOS / Linux — wipe:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/uninstall-complete.sh | sh -s -- --force
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/uninstall-complete.sh | sh -s -- --force
 ```
 
 **Windows — inventory:**
 
 ```powershell
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/uninstall-complete.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/uninstall-complete.ps1 | iex
 ```
 
 **Windows — wipe:**
 
 ```powershell
 $env:TENETX_FORCE = '1'
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/uninstall-complete.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/uninstall-complete.ps1 | iex
 ```
 
 ### Local clone
@@ -73,44 +75,44 @@ os.environ.get("TENETX_AGENT_CAPTURE", "<baked-default>") == "1"
 
 The baked default is usually `0` unless the org was in server `TENETX_CAPTURE_ORGS` at hook install time. This script sets the client override so capture works without reinstalling hooks.
 
-### One-liners (release v1.3.0)
+### One-liners (release v1.4.0)
 
 **macOS / Linux — enable:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/enable-agent-capture.sh | sh -s -- enable
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/enable-agent-capture.sh | sh -s -- enable
 ```
 
 **macOS / Linux — disable:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/enable-agent-capture.sh | sh -s -- disable
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/enable-agent-capture.sh | sh -s -- disable
 ```
 
 **macOS / Linux — status:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/enable-agent-capture.sh | sh -s -- status
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/enable-agent-capture.sh | sh -s -- status
 ```
 
 **Windows — enable:**
 
 ```powershell
 $env:TENETX_CAPTURE_ACTION = 'enable'
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/enable-agent-capture.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/enable-agent-capture.ps1 | iex
 ```
 
 **Windows — disable:**
 
 ```powershell
 $env:TENETX_CAPTURE_ACTION = 'disable'
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/enable-agent-capture.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/enable-agent-capture.ps1 | iex
 ```
 
 **Windows — status:**
 
 ```powershell
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/enable-agent-capture.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/enable-agent-capture.ps1 | iex
 ```
 
 ### Local clone
@@ -198,14 +200,14 @@ pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Revert -Agents claude,copilot
 **Windows — dry-run:**
 
 ```powershell
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/fix-agent-hooks.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/fix-agent-hooks.ps1 | iex
 ```
 
 **Windows — apply (claude + copilot defaults):**
 
 ```powershell
 # Download then apply (iex alone cannot pass -Apply reliably)
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
 pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Apply -Verify
 ```
 
@@ -265,7 +267,18 @@ Requires PowerShell 7+, optional real install paths for decision-body assert (`t
 
 ## Versions
 
-### v1.3.1 (current)
+### v1.4.0 (current)
+
+12-agent uninstall parity with the `tenetx` CLI, plus `build-cli` residue cleanup:
+
+- **12-agent hard-wipe parity** with `cli-go/internal/ide/ide.go` (+ `hooks.Uninstall`): antigravity (`~/.gemini/config/hooks.json` top-level `tenetx-guard` key), qwen_code, hermes (`config.yaml` sentinel block + `shell-hooks-allowlist.json` approvals), augment_code, kiro (`hooks/tenetx-guard.json`), cline (content-marked dispatch files, macOS/Linux), vibe_code (`hooks.toml` sentinel block); windsurf now scrubs the live `~/.codeium/windsurf/hooks.json` plus Devin Local `~/.config/devin/config.json`.
+- **CLI residue**: `__pycache__/tenetx-guard.*` and `tenetx-guard.<ext>.*` wrapper backups, the `*.tenetx-backup.*` / `*.tenetx-test-backup.*` / `*.pre-tenetx-clean.*` / `*.backup-tenetx-*` config-backup family, `~/.cache/tenetx`, `~/.codex/rules/tenetx.rules`, and the Codex browser skill `~/.agents/skills/tenetx-browser`.
+- **Legacy `hooks/hooks.json` delete is now cursor-only.** The generic guard-dir sweep used to delete a `hooks.json` inside *any* agent's hooks dir, which could destroy a user's own `~/.kiro/hooks/hooks.json` / `~/.qwen/hooks/hooks.json`.
+- **Removes local-stack `build-cli` residue**: the `# >>> TENETX_CLI_PATH >>>` rc block and `tenetx*.bak` / `tenetx.*.bak` next to the binary (skipped under `--keep-binary`).
+- **Portable `sh`**: no unguarded expansions and no caller-visible shell globals, so the wipe also survives `/bin/sh` = dash (verified in `tests/smoke-uninstall.sh`).
+- **`tests/smoke-uninstall.sh`**: throwaway-HOME wipe/dry-run regression suite (76 assertions) guarding the removal table against user-data loss, with a host-binary checksum guard.
+
+### v1.3.1
 
 `fix-agent-hooks.ps1` fix release:
 
@@ -277,7 +290,7 @@ Requires PowerShell 7+, optional real install paths for decision-body assert (`t
 
 ```powershell
 # Dry-run
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.3.1/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
 pwsh -NoProfile -File .\fix-agent-hooks.ps1
 
 # Apply

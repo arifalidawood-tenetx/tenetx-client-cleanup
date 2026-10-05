@@ -9,6 +9,8 @@
 #   # or download then:  .\uninstall-complete.ps1 -Force
 #
 # Parity with local-stacks/runners/complete_uninstall.py and uninstall-complete.sh.
+# Covers all 12 CLI agents (cli-go/internal/ide/ide.go Slugs; cline is
+# macOS/Linux only) + run.sh build-cli tenetx.exe.bak.
 # On macOS/Linux use uninstall-complete.sh instead.
 #
 # Params: -Force | -DryRun | -KeepBinary | -SkipRevoke | -Org <slug>
@@ -90,6 +92,12 @@ $WinBinary = Join-Path $WinBinDir 'tenetx.exe'
 
 $script:HadError = $false
 $script:Actions = 0
+
+# Sentinel blocks written by the CLI / server installer into third-party files.
+$HermesMarkStart = '# >>> TENETX GUARD (managed) - do not edit by hand'
+$HermesMarkEnd = '# <<< TENETX GUARD (managed)'
+$VibeMarkStart = '# >>> TENETX MANAGED HOOKS -- do not edit inside this block >>>'
+$VibeMarkEnd = '# <<< TENETX MANAGED HOOKS <<<'
 
 function Note([string]$Message) {
     $script:Actions++
@@ -183,7 +191,14 @@ function Show-Inventory([string]$Label) {
         @{ Name = 'cursor'; Hooks = (Join-Path $HomeDir '.cursor\hooks') },
         @{ Name = 'windsurf'; Hooks = (Join-Path $HomeDir '.windsurf\hooks') },
         @{ Name = 'codex'; Hooks = (Join-Path $TenetxDir 'hooks\codex') },
-        @{ Name = 'copilot'; Hooks = (Join-Path $HomeDir '.copilot\hooks') }
+        @{ Name = 'copilot'; Hooks = (Join-Path $HomeDir '.copilot\hooks') },
+        @{ Name = 'antigravity'; Hooks = (Join-Path $HomeDir '.antigravity\hooks') },
+        @{ Name = 'qwen_code'; Hooks = (Join-Path $HomeDir '.qwen\hooks') },
+        @{ Name = 'hermes'; Hooks = (Join-Path $HomeDir '.hermes\hooks') },
+        @{ Name = 'augment_code'; Hooks = (Join-Path $HomeDir '.augment\hooks') },
+        @{ Name = 'kiro'; Hooks = (Join-Path $HomeDir '.kiro\hooks') },
+        @{ Name = 'cline'; Hooks = (Join-Path $TenetxDir 'hooks\cline') },
+        @{ Name = 'vibe_code'; Hooks = (Join-Path $HomeDir '.vibe\hooks') }
     )
     $guards = @(
         'tenetx-guard.py', 'tenetx-guard.sh', 'tenetx-guard.cmd', 'tenetx-guard.ps1',
@@ -327,6 +342,22 @@ elif mode == "mcp":
             if any(m in text for m in MARKERS):
                 del servers[name]
                 changed = True
+elif mode == "toplevel":
+    # Antigravity keys hooks.json by hook NAME; ours is one top-level key.
+    if "tenetx-guard" in data:
+        del data["tenetx-guard"]
+        changed = True
+elif mode == "approvals":
+    # Hermes shell-hooks allowlist: drop rows authorising our own guard.
+    approvals = data.get("approvals")
+    if isinstance(approvals, list):
+        kept = [
+            a for a in approvals
+            if not (isinstance(a, dict) and "tenetx-guard" in str(a.get("command", "")).lower())
+        ]
+        if len(kept) != len(approvals):
+            data["approvals"] = kept
+            changed = True
 if not changed:
     sys.exit(0)
 backup = path.with_name(path.name + ".tenetx-complete-uninstall-backup")
@@ -401,6 +432,64 @@ path.write_text("".join(kept), encoding="utf-8")
     }
 }
 
+# Remove the sentinel block (inclusive) from a text file, leaving every other
+# line — including the user's own hooks — intact.
+function Strip-MarkerBlock([string]$Path, [string]$Begin, [string]$End) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $lines = @([System.IO.File]::ReadAllLines($Path))
+    $hasBegin = $false
+    $hasEnd = $false
+    foreach ($line in $lines) {
+        $t = $line.Trim()
+        if ($t -eq $Begin) { $hasBegin = $true }
+        if ($t -eq $End) { $hasEnd = $true }
+    }
+    if (-not ($hasBegin -and $hasEnd)) { return }
+    Note "strip-block: $Path ($Begin)"
+    if ($DryRun) { return }
+
+    $backup = "$Path.tenetx-complete-uninstall-backup"
+    if (-not (Test-Path -LiteralPath $backup)) {
+        Copy-Item -LiteralPath $Path -Destination $backup -Force
+    }
+    $kept = New-Object System.Collections.Generic.List[string]
+    $skip = $false
+    foreach ($line in $lines) {
+        $t = $line.Trim()
+        if ((-not $skip) -and $t -eq $Begin) { $skip = $true; continue }
+        if ($skip -and $t -eq $End) { $skip = $false; continue }
+        if (-not $skip) { $kept.Add($line) }
+    }
+    try {
+        [System.IO.File]::WriteAllLines($Path, $kept, (New-Object System.Text.UTF8Encoding($false)))
+    } catch {
+        Write-Warn "strip-block failed $Path : $_"
+        $script:HadError = $true
+    }
+}
+
+# CLI backup residue for the wiring files (cli-go/internal/uninstall/cleanup.go
+# Backups). Our own *.tenetx-complete-uninstall-backup and fix-agent-hooks'
+# *.tenetx-bak-* are the operators' rollback points and are deliberately kept.
+function Remove-CliBackups([string[]]$Paths) {
+    foreach ($p in $Paths) {
+        foreach ($suffix in @('.tenetx-backup.*', '.tenetx-test-backup.*', '.pre-tenetx-clean.*', '.backup-tenetx-*')) {
+            $hits = @(Get-ChildItem -Path "$p$suffix" -Force -ErrorAction SilentlyContinue)
+            foreach ($hit in $hits) {
+                Note "delete: $($hit.FullName)"
+                if (-not $DryRun) {
+                    try {
+                        Remove-Item -LiteralPath $hit.FullName -Force
+                    } catch {
+                        Write-Warn "delete failed $($hit.FullName) : $_"
+                        $script:HadError = $true
+                    }
+                }
+            }
+        }
+    }
+}
+
 function Remove-GuardDir([string]$HooksDir) {
     if (-not (Test-Path -LiteralPath $HooksDir)) { return }
     # Known guard artifacts (incl. orphan PowerShell wrapper)
@@ -450,7 +539,63 @@ function Remove-GuardDir([string]$HooksDir) {
             }
         }
     }
-    $legacy = Join-Path $HooksDir 'hooks.json'
+    # Updater bytecode (cleanup.go Agent). The tenetx-* stray sweep above already
+    # covers tenetx-guard.<ext>.* wrapper backups.
+    $pycDir = Join-Path $HooksDir '__pycache__'
+    if (Test-Path -LiteralPath $pycDir) {
+        foreach ($f in @(Get-ChildItem -LiteralPath $pycDir -File -Filter 'tenetx-guard.*' -ErrorAction SilentlyContinue)) {
+            Note "delete: $($f.FullName)"
+            if (-not $DryRun) {
+                try { Remove-Item -LiteralPath $f.FullName -Force } catch {
+                    Write-Warn "delete failed $($f.FullName) : $_"
+                    $script:HadError = $true
+                }
+            }
+        }
+        if ((-not $DryRun) -and (Test-Path -LiteralPath $pycDir) -and
+            -not (Get-ChildItem -LiteralPath $pycDir -Force -ErrorAction SilentlyContinue)) {
+            Remove-Item -LiteralPath $pycDir -Force -ErrorAction SilentlyContinue
+        }
+    }
+    # Old hook-dir copies may hold unrelated user hooks: remove only our files,
+    # never the directory (cleanup.go Backups).
+    foreach ($copy in @(Get-ChildItem -Path "$HooksDir.tenetx-backup.*", "$HooksDir.tenetx-paused" `
+                -Directory -Force -ErrorAction SilentlyContinue)) {
+        foreach ($g in @(
+                'tenetx-guard.py', 'tenetx-guard.sh', 'tenetx-guard.cmd', 'tenetx-guard.ps1',
+                '.tenetx-guard.json', '.update-state.json'
+            )) {
+            $p = Join-Path $copy.FullName $g
+            if (Test-Path -LiteralPath $p) {
+                Note "delete: $p"
+                if (-not $DryRun) {
+                    try { Remove-Item -LiteralPath $p -Force } catch {
+                        Write-Warn "delete failed $p : $_"
+                        $script:HadError = $true
+                    }
+                }
+            }
+        }
+    }
+}
+
+function Invoke-HardWipe {
+    # One block per agent; order + paths mirror cli-go/internal/ide/ide.go
+    # (layoutBySlug) and hooks.Uninstall. Cline is macOS/Linux only — the CLI
+    # refuses it on Windows, so there is nothing to remove here.
+
+    # claude_code
+    Remove-GuardDir (Join-Path $HomeDir '.claude\hooks')
+    Scrub-JsonFile (Join-Path $HomeDir '.claude\settings.json') 'hooks'
+    Scrub-JsonFile (Join-Path $HomeDir '.claude.json') 'mcp'
+
+    # cursor
+    Remove-GuardDir (Join-Path $HomeDir '.cursor\hooks')
+    Scrub-JsonFile (Join-Path $HomeDir '.cursor\hooks.json') 'hooks'
+    Scrub-JsonFile (Join-Path $HomeDir '.cursor\mcp.json') 'mcp'
+    # Legacy misplaced wiring older builds wrote under hooks/ (cursor only —
+    # elsewhere a hooks.json under a guard dir is the user's own file).
+    $legacy = Join-Path (Join-Path $HomeDir '.cursor\hooks') 'hooks.json'
     if (Test-Path -LiteralPath $legacy) {
         Note "delete: $legacy (legacy hooks.json under hooks/)"
         if (-not $DryRun) {
@@ -460,28 +605,98 @@ function Remove-GuardDir([string]$HooksDir) {
             }
         }
     }
-}
 
-function Invoke-HardWipe {
-    Remove-GuardDir (Join-Path $HomeDir '.claude\hooks')
-    Scrub-JsonFile (Join-Path $HomeDir '.claude\settings.json') 'hooks'
-    Scrub-JsonFile (Join-Path $HomeDir '.claude.json') 'mcp'
-
-    Remove-GuardDir (Join-Path $HomeDir '.cursor\hooks')
-    Scrub-JsonFile (Join-Path $HomeDir '.cursor\hooks.json') 'hooks'
-    Scrub-JsonFile (Join-Path $HomeDir '.cursor\mcp.json') 'mcp'
-
+    # windsurf (Devin)
     Remove-GuardDir (Join-Path $HomeDir '.windsurf\hooks')
+    Scrub-JsonFile (Join-Path $HomeDir '.codeium\windsurf\hooks.json') 'hooks'
+    Scrub-JsonFile (Join-Path $HomeDir '.config\devin\config.json') 'hooks'
+    Scrub-JsonFile (Join-Path $HomeDir '.windsurf\settings.json') 'hooks'
     Scrub-JsonFile (Join-Path $HomeDir '.windsurf\mcp.json') 'hooks'
     Scrub-JsonFile (Join-Path $HomeDir '.windsurf\mcp.json') 'mcp'
 
+    # codex
     Remove-GuardDir (Join-Path $TenetxDir 'hooks\codex')
     Scrub-JsonFile (Join-Path $HomeDir '.codex\hooks.json') 'hooks'
 
+    # copilot
     Remove-GuardDir (Join-Path $HomeDir '.copilot\hooks')
     Scrub-JsonFile (Join-Path $HomeDir '.copilot\hooks\notification-hooks.json') 'hooks'
 
+    # antigravity — hooks.json is keyed by hook NAME, ours is one top-level key
+    Remove-GuardDir (Join-Path $HomeDir '.antigravity\hooks')
+    Scrub-JsonFile (Join-Path $HomeDir '.gemini\config\hooks.json') 'toplevel'
+
+    # qwen_code
+    Remove-GuardDir (Join-Path $HomeDir '.qwen\hooks')
+    Scrub-JsonFile (Join-Path $HomeDir '.qwen\settings.json') 'hooks'
+
+    # hermes
+    Remove-GuardDir (Join-Path $HomeDir '.hermes\hooks')
+    Strip-MarkerBlock (Join-Path $HomeDir '.hermes\config.yaml') $HermesMarkStart $HermesMarkEnd
+    Scrub-JsonFile (Join-Path $HomeDir '.hermes\shell-hooks-allowlist.json') 'approvals'
+
+    # augment_code
+    Remove-GuardDir (Join-Path $HomeDir '.augment\hooks')
+    Scrub-JsonFile (Join-Path $HomeDir '.augment\settings.json') 'hooks'
+
+    # kiro — tenetx-guard.json holds nothing but our hooks (removed by the
+    # tenetx-* stray sweep in Remove-GuardDir)
+    Remove-GuardDir (Join-Path $HomeDir '.kiro\hooks')
+
+    # vibe_code
+    Remove-GuardDir (Join-Path $HomeDir '.vibe\hooks')
+    Strip-MarkerBlock (Join-Path $HomeDir '.vibe\hooks.toml') $VibeMarkStart $VibeMarkEnd
+
+    # codex: MCP rows in config.toml, plus adapter-owned rule file + browser skill
     Scrub-TomlFile (Join-Path $HomeDir '.codex\config.toml')
+    foreach ($codexResidue in @(
+            (Join-Path $HomeDir '.codex\rules\tenetx.rules'),
+            (Join-Path $HomeDir '.agents\skills\tenetx-browser')
+        )) {
+        if (Test-Path -LiteralPath $codexResidue) {
+            $isDir = (Get-Item -LiteralPath $codexResidue -Force).PSIsContainer
+            Note "$(if ($isDir) { 'rmtree' } else { 'delete' }): $codexResidue"
+            if (-not $DryRun) {
+                try { Remove-Item -LiteralPath $codexResidue -Recurse -Force } catch {
+                    Write-Warn "delete failed $codexResidue : $_"
+                    $script:HadError = $true
+                }
+            }
+        }
+    }
+
+    # --- shared residue ---
+    $cache = Join-Path $HomeDir '.cache\tenetx'
+    if (Test-Path -LiteralPath $cache) {
+        Note "rmtree: $cache"
+        if (-not $DryRun) {
+            try { Remove-Item -LiteralPath $cache -Recurse -Force } catch {
+                Write-Warn "rmtree $cache failed: $_"
+                $script:HadError = $true
+            }
+        }
+    }
+
+    Remove-CliBackups @(
+        (Join-Path $HomeDir '.claude\settings.json'),
+        (Join-Path $HomeDir '.claude.json'),
+        (Join-Path $HomeDir '.cursor\hooks.json'),
+        (Join-Path $HomeDir '.cursor\mcp.json'),
+        (Join-Path $HomeDir '.codeium\windsurf\hooks.json'),
+        (Join-Path $HomeDir '.config\devin\config.json'),
+        (Join-Path $HomeDir '.windsurf\settings.json'),
+        (Join-Path $HomeDir '.windsurf\mcp.json'),
+        (Join-Path $HomeDir '.codex\hooks.json'),
+        (Join-Path $HomeDir '.codex\config.toml'),
+        (Join-Path $HomeDir '.copilot\hooks\notification-hooks.json'),
+        (Join-Path $HomeDir '.gemini\config\hooks.json'),
+        (Join-Path $HomeDir '.qwen\settings.json'),
+        (Join-Path $HomeDir '.hermes\config.yaml'),
+        (Join-Path $HomeDir '.hermes\shell-hooks-allowlist.json'),
+        (Join-Path $HomeDir '.augment\settings.json'),
+        (Join-Path $HomeDir '.kiro\hooks\tenetx-guard.json'),
+        (Join-Path $HomeDir '.vibe\hooks.toml')
+    )
 
     if (Test-Path -LiteralPath $TenetxDir) {
         Note "rmtree: $TenetxDir (full ~/.tenetx wipe)"
@@ -507,6 +722,27 @@ function Remove-BinaryAndPath {
                 Remove-Item -LiteralPath $b -Force
             } catch {
                 Write-Warn "delete failed $b : $_ (TENQA-29: re-run elevated if Administrators-owned)"
+                $script:HadError = $true
+            }
+        }
+    }
+
+    # build-cli keeps one rolling <name>.bak next to the binary.
+    $bak = "$WinBinary.bak"
+    if (Test-Path -LiteralPath $bak) {
+        Note "delete: $bak"
+        if (-not $DryRun) {
+            try { Remove-Item -LiteralPath $bak -Force } catch {
+                Write-Warn "delete failed $bak : $_"
+                $script:HadError = $true
+            }
+        }
+    }
+    foreach ($extra in @(Get-ChildItem -Path "$WinBinDir\tenetx.*.bak" -Force -ErrorAction SilentlyContinue)) {
+        Note "delete: $($extra.FullName)"
+        if (-not $DryRun) {
+            try { Remove-Item -LiteralPath $extra.FullName -Force } catch {
+                Write-Warn "delete failed $($extra.FullName) : $_"
                 $script:HadError = $true
             }
         }
@@ -565,6 +801,13 @@ function Test-Residuals {
             Write-Say "residual binary: $b"
             $fail = $true
         }
+        foreach ($bak in @("$WinBinary.bak") + @(Get-ChildItem -Path "$WinBinDir\tenetx.*.bak" -Force -ErrorAction SilentlyContinue |
+                    ForEach-Object { $_.FullName })) {
+            if (Test-Path -LiteralPath $bak) {
+                Write-Say "residual backup: $bak"
+                $fail = $true
+            }
+        }
         $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
         if (Test-PathContains $userPath $WinBinDir) {
             Write-Say "residual: User PATH contains $WinBinDir"
@@ -575,7 +818,13 @@ function Test-Residuals {
         (Join-Path $HomeDir '.claude\hooks'),
         (Join-Path $HomeDir '.cursor\hooks'),
         (Join-Path $HomeDir '.windsurf\hooks'),
-        (Join-Path $HomeDir '.copilot\hooks')
+        (Join-Path $HomeDir '.copilot\hooks'),
+        (Join-Path $HomeDir '.antigravity\hooks'),
+        (Join-Path $HomeDir '.qwen\hooks'),
+        (Join-Path $HomeDir '.hermes\hooks'),
+        (Join-Path $HomeDir '.augment\hooks'),
+        (Join-Path $HomeDir '.kiro\hooks'),
+        (Join-Path $HomeDir '.vibe\hooks')
     )) {
         foreach ($g in @(
                 'tenetx-guard.py', 'tenetx-guard.sh', 'tenetx-guard.cmd', 'tenetx-guard.ps1',
@@ -595,6 +844,30 @@ function Test-Residuals {
                 $fail = $true
             }
         }
+    }
+    # kiro: the hook definition file is entirely ours
+    $kiroFile = Join-Path $HomeDir '.kiro\hooks\tenetx-guard.json'
+    if (Test-Path -LiteralPath $kiroFile) {
+        Write-Say "residual wiring: $kiroFile"
+        $fail = $true
+    }
+    # hermes / vibe: the sentinel block must be gone
+    foreach ($pair in @(
+            @{ Path = (Join-Path $HomeDir '.hermes\config.yaml'); Marker = $HermesMarkStart },
+            @{ Path = (Join-Path $HomeDir '.vibe\hooks.toml'); Marker = $VibeMarkStart }
+        )) {
+        if ((Test-Path -LiteralPath $pair.Path) -and
+            (Select-String -LiteralPath $pair.Path -SimpleMatch -Pattern $pair.Marker -Quiet)) {
+            Write-Say "residual wiring: $($pair.Path) ($($pair.Marker))"
+            $fail = $true
+        }
+    }
+    # antigravity: top-level hook name
+    $geminiHooks = Join-Path $HomeDir '.gemini\config\hooks.json'
+    if ((Test-Path -LiteralPath $geminiHooks) -and
+        (Select-String -LiteralPath $geminiHooks -SimpleMatch -Pattern '"tenetx-guard"' -Quiet)) {
+        Write-Say "residual wiring: $geminiHooks (tenetx-guard)"
+        $fail = $true
     }
     return -not $fail
 }

@@ -9,6 +9,8 @@
 #   # or: TENETX_FORCE=1 curl -fsSL <URL>/uninstall-complete.sh | sh
 #
 # Parity with local-stacks/runners/complete_uninstall.py.
+# Covers all 12 CLI agents (cli-go/internal/ide/ide.go Slugs) + run.sh build-cli
+# PATH block/.bak.
 # On Windows use uninstall-complete.ps1 instead.
 #
 # Flags: --force | --dry-run | --keep-binary | --skip-revoke | --org <slug>
@@ -71,6 +73,157 @@ note() {
     say "  $*"
   fi
 }
+
+# Return 0 when the path exists as a file OR a (possibly dangling) symlink.
+path_exists() {
+  [ -e "$1" ] || [ -L "$1" ]
+}
+
+del_file() {
+  _p="$1"
+  _why="${2:-}"
+  path_exists "$_p" || return 0
+  if [ -n "$_why" ]; then
+    note "delete: $_p ($_why)"
+  else
+    note "delete: $_p"
+  fi
+  if [ "$DRY_RUN" -eq 0 ]; then
+    rm -f "$_p" || { warn "delete failed $_p"; HAD_ERROR=1; }
+  fi
+}
+
+del_tree() {
+  _t="$1"
+  _why="${2:-}"
+  path_exists "$_t" || return 0
+  if [ -n "$_why" ]; then
+    note "rmtree: $_t ($_why)"
+  else
+    note "rmtree: $_t"
+  fi
+  if [ "$DRY_RUN" -eq 0 ]; then
+    rm -rf "$_t" || { warn "rmtree failed $_t"; HAD_ERROR=1; }
+  fi
+}
+
+# Remove the markers' block (inclusive) from a text file, leaving every other
+# line — including the user's own entries — byte-identical.
+strip_marker_block() {
+  path="$1"
+  begin="$2"
+  end="$3"
+  [ -f "$path" ] || return 0
+  grep -qF "$begin" "$path" 2>/dev/null || return 0
+  grep -qF "$end" "$path" 2>/dev/null || return 0
+  note "strip-block: $path ($begin)"
+  [ "$DRY_RUN" -eq 0 ] || return 0
+  backup="$path.tenetx-complete-uninstall-backup"
+  [ -e "$backup" ] || cp -p "$path" "$backup" || warn "backup failed $path"
+  tmp="$path.tenetx-strip.$$"
+  if awk -v s="$begin" -v e="$end" '
+    {t=$0; sub(/^[ \t]+/,"",t); sub(/[ \t\r]+$/,"",t)}
+    !skip && t==s {skip=1; next}
+    skip && t==e {skip=0; next}
+    !skip {print}
+  ' "$path" > "$tmp" && mv "$tmp" "$path"; then
+    :
+  else
+    rm -f "$tmp"
+    warn "strip-block failed $path"
+    HAD_ERROR=1
+  fi
+}
+
+# Scrub a JSON file with a non-hooks shape: "toplevel" drops the top-level
+# "tenetx-guard" key (Antigravity), "approvals" drops allowlist rows whose
+# command is ours (Hermes shell-hooks-allowlist.json).
+scrub_json_misc() {
+  path="$1"
+  mode="$2"
+  [ -f "$path" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "python3 missing — skip JSON scrub $path"
+    return 0
+  fi
+  note "json-scrub: $path ($mode)"
+  [ "$DRY_RUN" -eq 0 ] || return 0
+  python3 - "$path" "$mode" <<'PY' || warn "JSON scrub failed: $path"
+import json, shutil, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+mode = sys.argv[2]
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception as e:
+    print(f"skip: {e}", file=sys.stderr)
+    sys.exit(0)
+if not isinstance(data, dict):
+    sys.exit(0)
+changed = False
+if mode == "toplevel":
+    if "tenetx-guard" in data:
+        del data["tenetx-guard"]
+        changed = True
+elif mode == "approvals":
+    approvals = data.get("approvals")
+    if isinstance(approvals, list):
+        kept = [
+            a for a in approvals
+            if not (isinstance(a, dict) and "tenetx-guard" in str(a.get("command", "")).lower())
+        ]
+        if len(kept) != len(approvals):
+            data["approvals"] = kept
+            changed = True
+if not changed:
+    sys.exit(0)
+backup = path.with_name(path.name + ".tenetx-complete-uninstall-backup")
+if not backup.exists():
+    shutil.copy2(path, backup)
+path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+PY
+}
+
+# Cline registers hooks by FILE PRESENCE, so ownership is the file's content
+# marker. Two discovery roots; the CLI writes only the first.
+remove_cline_dispatch() {
+  case "$os" in
+    darwin|linux) : ;;
+    *) return 0 ;;
+  esac
+  for d in "$HOME_DIR/Documents/Cline/Hooks" "$HOME_DIR/.cline/hooks"; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do
+      [ -f "$f" ] || continue
+      if grep -q 'TENETX-CLINE-HOOK' "$f" 2>/dev/null; then
+        del_file "$f" "cline dispatch"
+      fi
+    done
+  done
+}
+
+# CLI backup residue (cli-go/internal/uninstall/cleanup.go Backups). Our own
+# *.tenetx-complete-uninstall-backup and fix-agent-hooks' *.tenetx-bak-* are the
+# operators' rollback points and are deliberately kept.
+remove_cli_backups() {
+  for base in "$@"; do
+    for suf in ".tenetx-backup.*" ".tenetx-test-backup.*" ".pre-tenetx-clean.*" ".backup-tenetx-*"; do
+      for b in "$base"$suf; do
+        del_file "$b"
+      done
+    done
+  done
+}
+
+RC_FILES="$HOME_DIR/.zshrc $HOME_DIR/.zprofile $HOME_DIR/.bashrc $HOME_DIR/.bash_profile $HOME_DIR/.profile"
+CLI_PATH_MARK_START='# >>> TENETX_CLI_PATH >>>'
+CLI_PATH_MARK_END='# <<< TENETX_CLI_PATH <<<'
+CODEX_CLI_MARK_START='# >>> TenetX managed Codex CLI >>>'
+CODEX_CLI_MARK_END='# <<< TenetX managed Codex CLI <<<'
+HERMES_MARK_START='# >>> TENETX GUARD (managed) - do not edit by hand'
+HERMES_MARK_END='# <<< TENETX GUARD (managed)'
+VIBE_MARK_START='# >>> TENETX MANAGED HOOKS -- do not edit inside this block >>>'
+VIBE_MARK_END='# <<< TENETX MANAGED HOOKS <<<'
 
 # Print existing binary paths (deduped). install.sh + Homebrew + which.
 list_binaries() {
@@ -145,12 +298,19 @@ inventory() {
     "cursor|$HOME_DIR/.cursor/hooks" \
     "windsurf|$HOME_DIR/.windsurf/hooks" \
     "codex|$TENETX_DIR/hooks/codex" \
-    "copilot|$HOME_DIR/.copilot/hooks"
+    "copilot|$HOME_DIR/.copilot/hooks" \
+    "antigravity|$HOME_DIR/.antigravity/hooks" \
+    "qwen_code|$HOME_DIR/.qwen/hooks" \
+    "hermes|$HOME_DIR/.hermes/hooks" \
+    "augment_code|$HOME_DIR/.augment/hooks" \
+    "kiro|$HOME_DIR/.kiro/hooks" \
+    "cline|$TENETX_DIR/hooks/cline" \
+    "vibe_code|$HOME_DIR/.vibe/hooks"
   do
     name=${pair%%|*}
     hooks=${pair#*|}
     found=""
-    for g in tenetx-guard.py tenetx-guard.sh tenetx-guard.cmd .tenetx-guard.json .update-state.json; do
+    for g in tenetx-guard.py tenetx-guard.sh tenetx-guard.cmd tenetx-guard.ps1 .tenetx-guard.json .update-state.json; do
       if [ -e "$hooks/$g" ]; then
         found="$found $hooks/$g"
       fi
@@ -308,55 +468,103 @@ path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 PY
 }
 
+remove_guard_files_in() {
+  dir="$1"
+  [ -d "$dir" ] || return 0
+  for g in tenetx-guard.py tenetx-guard.sh tenetx-guard.cmd tenetx-guard.ps1 .tenetx-guard.json .update-state.json; do
+    del_file "$dir/$g"
+  done
+}
+
 remove_guard_dir() {
   hooks="$1"
   [ -d "$hooks" ] || return 0
-  for g in tenetx-guard.py tenetx-guard.sh tenetx-guard.cmd .tenetx-guard.json .update-state.json; do
-    p="$hooks/$g"
-    if [ -e "$p" ]; then
-      note "delete: $p"
-      if [ "$DRY_RUN" -eq 0 ]; then
-        rm -f "$p" || { warn "delete failed $p"; HAD_ERROR=1; }
-      fi
+  remove_guard_files_in "$hooks"
+  # Old hook-dir copies may hold unrelated user hooks: remove only our files.
+  for d in "$hooks".tenetx-backup.* "$hooks.tenetx-paused"; do
+    if [ -d "$d" ]; then
+      remove_guard_files_in "$d"
     fi
   done
   for sub in versions current; do
-    p="$hooks/$sub"
-    if [ -e "$p" ]; then
-      note "rmtree: $p"
-      if [ "$DRY_RUN" -eq 0 ]; then
-        rm -rf "$p" || { warn "rmtree failed $p"; HAD_ERROR=1; }
-      fi
-    fi
+    del_tree "$hooks/$sub"
   done
-  legacy="$hooks/hooks.json"
-  if [ -e "$legacy" ]; then
-    note "delete: $legacy (legacy hooks.json under hooks/)"
-    if [ "$DRY_RUN" -eq 0 ]; then
-      rm -f "$legacy" || { warn "delete failed $legacy"; HAD_ERROR=1; }
-    fi
-  fi
+  # Updater bytecode + wrapper backups (cleanup.go Agent).
+  for pat in "tenetx-guard.sh.*" "tenetx-guard.py.*" "tenetx-guard.cmd.*" "tenetx-guard.ps1.*"; do
+    for f in "$hooks"/$pat; do
+      del_file "$f"
+    done
+  done
+  for f in "$hooks"/__pycache__/tenetx-guard.*; do
+    del_file "$f"
+  done
 }
 
 hard_wipe() {
+  # One block per agent; order + paths mirror cli-go/internal/ide/ide.go
+  # (layoutBySlug) and hooks.Uninstall. cline/vibe are skipped on Windows only,
+  # which this script never runs on.
+
+  # claude_code
   remove_guard_dir "$HOME_DIR/.claude/hooks"
   scrub_json_hooks "$HOME_DIR/.claude/settings.json"
   scrub_json_mcp "$HOME_DIR/.claude.json"
 
+  # cursor
   remove_guard_dir "$HOME_DIR/.cursor/hooks"
   scrub_json_hooks "$HOME_DIR/.cursor/hooks.json"
   scrub_json_mcp "$HOME_DIR/.cursor/mcp.json"
+  # Legacy misplaced wiring older builds wrote under hooks/ (cursor only —
+  # the CLI does this nowhere else, and other agents' guard dirs may hold a
+  # user's own hooks.json).
+  del_file "$HOME_DIR/.cursor/hooks/hooks.json" "legacy hooks.json under hooks/"
 
+  # windsurf (Devin)
   remove_guard_dir "$HOME_DIR/.windsurf/hooks"
+  scrub_json_hooks "$HOME_DIR/.codeium/windsurf/hooks.json"
+  scrub_json_hooks "$HOME_DIR/.config/devin/config.json"
+  scrub_json_hooks "$HOME_DIR/.windsurf/settings.json"
   scrub_json_hooks "$HOME_DIR/.windsurf/mcp.json"
   scrub_json_mcp "$HOME_DIR/.windsurf/mcp.json"
 
+  # codex
   remove_guard_dir "$TENETX_DIR/hooks/codex"
   scrub_json_hooks "$HOME_DIR/.codex/hooks.json"
 
+  # copilot
   remove_guard_dir "$HOME_DIR/.copilot/hooks"
   scrub_json_hooks "$HOME_DIR/.copilot/hooks/notification-hooks.json"
 
+  # antigravity — hooks.json is keyed by hook NAME, ours is a single top-level key
+  remove_guard_dir "$HOME_DIR/.antigravity/hooks"
+  scrub_json_misc "$HOME_DIR/.gemini/config/hooks.json" toplevel
+
+  # qwen_code
+  remove_guard_dir "$HOME_DIR/.qwen/hooks"
+  scrub_json_hooks "$HOME_DIR/.qwen/settings.json"
+
+  # hermes
+  remove_guard_dir "$HOME_DIR/.hermes/hooks"
+  strip_marker_block "$HOME_DIR/.hermes/config.yaml" "$HERMES_MARK_START" "$HERMES_MARK_END"
+  scrub_json_misc "$HOME_DIR/.hermes/shell-hooks-allowlist.json" approvals
+
+  # augment_code
+  remove_guard_dir "$HOME_DIR/.augment/hooks"
+  scrub_json_hooks "$HOME_DIR/.augment/settings.json"
+
+  # kiro — tenetx-guard.json holds nothing but our hooks
+  remove_guard_dir "$HOME_DIR/.kiro/hooks"
+  del_file "$HOME_DIR/.kiro/hooks/tenetx-guard.json"
+
+  # cline — installs by file presence, no settings file
+  remove_guard_dir "$TENETX_DIR/hooks/cline"
+  remove_cline_dispatch
+
+  # vibe_code
+  remove_guard_dir "$HOME_DIR/.vibe/hooks"
+  strip_marker_block "$HOME_DIR/.vibe/hooks.toml" "$VIBE_MARK_START" "$VIBE_MARK_END"
+
+  # codex: MCP rows in config.toml, plus adapter-owned rule file + browser skill
   toml="$HOME_DIR/.codex/config.toml"
   if [ -f "$toml" ] && command -v python3 >/dev/null 2>&1; then
     note "toml-scrub: $toml"
@@ -398,6 +606,40 @@ PY
     warn "python3 missing — skip codex toml scrub"
   fi
 
+  del_file "$HOME_DIR/.codex/rules/tenetx.rules" "codex adapter rules"
+  del_tree "$HOME_DIR/.agents/skills/tenetx-browser" "codex browser skill"
+
+  # --- shared residue ---
+  del_tree "$HOME_DIR/.cache/tenetx"
+
+  # Older builds appended a Codex CLI PATH block pointing into ~/.tenetx/bin,
+  # which the wipe below deletes.
+  for rc in $RC_FILES; do
+    strip_marker_block "$rc" "$CODEX_CLI_MARK_START" "$CODEX_CLI_MARK_END"
+  done
+
+  # Every wiring file the table above scrubbed, plus each agent's own config
+  # basename (cleanup.go Backups).
+  remove_cli_backups \
+    "$HOME_DIR/.claude/settings.json" \
+    "$HOME_DIR/.claude.json" \
+    "$HOME_DIR/.cursor/hooks.json" \
+    "$HOME_DIR/.cursor/mcp.json" \
+    "$HOME_DIR/.codeium/windsurf/hooks.json" \
+    "$HOME_DIR/.config/devin/config.json" \
+    "$HOME_DIR/.windsurf/settings.json" \
+    "$HOME_DIR/.windsurf/mcp.json" \
+    "$HOME_DIR/.codex/hooks.json" \
+    "$HOME_DIR/.codex/config.toml" \
+    "$HOME_DIR/.copilot/hooks/notification-hooks.json" \
+    "$HOME_DIR/.gemini/config/hooks.json" \
+    "$HOME_DIR/.qwen/settings.json" \
+    "$HOME_DIR/.hermes/config.yaml" \
+    "$HOME_DIR/.hermes/shell-hooks-allowlist.json" \
+    "$HOME_DIR/.augment/settings.json" \
+    "$HOME_DIR/.kiro/hooks/tenetx-guard.json" \
+    "$HOME_DIR/.vibe/hooks.toml"
+
   if [ -e "$TENETX_DIR" ]; then
     note "rmtree: $TENETX_DIR (full ~/.tenetx wipe)"
     if [ "$DRY_RUN" -eq 0 ]; then
@@ -429,6 +671,21 @@ remove_binaries() {
     fi
   done
   IFS=$old_ifs
+
+  # build-cli keeps one rolling <name>.bak next to the binary.
+  for d in "${TENETX_INSTALL_DIR:-}" /usr/local/bin /opt/homebrew/bin "$HOME_DIR/.local/bin"; do
+    d="${d%/}"
+    [ -n "$d" ] || continue
+    del_file "$d/tenetx.bak"
+    for f in "$d"/tenetx.*.bak; do
+      del_file "$f"
+    done
+  done
+
+  # build-cli appends our own rc block so the install dir is on PATH.
+  for rc in $RC_FILES; do
+    strip_marker_block "$rc" "$CLI_PATH_MARK_START" "$CLI_PATH_MARK_END"
+  done
 }
 
 check_residuals() {
@@ -454,15 +711,69 @@ check_residuals() {
     "$HOME_DIR/.claude/hooks" \
     "$HOME_DIR/.cursor/hooks" \
     "$HOME_DIR/.windsurf/hooks" \
-    "$HOME_DIR/.copilot/hooks"
+    "$HOME_DIR/.copilot/hooks" \
+    "$HOME_DIR/.antigravity/hooks" \
+    "$HOME_DIR/.qwen/hooks" \
+    "$HOME_DIR/.hermes/hooks" \
+    "$HOME_DIR/.augment/hooks" \
+    "$HOME_DIR/.kiro/hooks" \
+    "$HOME_DIR/.vibe/hooks"
   do
-    for g in tenetx-guard.py tenetx-guard.sh tenetx-guard.cmd .tenetx-guard.json .update-state.json; do
+    for g in tenetx-guard.py tenetx-guard.sh tenetx-guard.cmd tenetx-guard.ps1 .tenetx-guard.json .update-state.json; do
       if [ -e "$hooks/$g" ]; then
         say "residual guard: $hooks/$g"
         fail=1
       fi
     done
   done
+  # kiro: the hook definition file is entirely ours
+  if [ -e "$HOME_DIR/.kiro/hooks/tenetx-guard.json" ]; then
+    say "residual wiring: $HOME_DIR/.kiro/hooks/tenetx-guard.json"
+    fail=1
+  fi
+  # hermes / vibe: sentinel block must be gone
+  if [ -f "$HOME_DIR/.hermes/config.yaml" ] && grep -qF "$HERMES_MARK_START" "$HOME_DIR/.hermes/config.yaml" 2>/dev/null; then
+    say "residual wiring: $HOME_DIR/.hermes/config.yaml ($HERMES_MARK_START)"
+    fail=1
+  fi
+  if [ -f "$HOME_DIR/.vibe/hooks.toml" ] && grep -qF "$VIBE_MARK_START" "$HOME_DIR/.vibe/hooks.toml" 2>/dev/null; then
+    say "residual wiring: $HOME_DIR/.vibe/hooks.toml ($VIBE_MARK_START)"
+    fail=1
+  fi
+  # antigravity: top-level hook name
+  if [ -f "$HOME_DIR/.gemini/config/hooks.json" ] && grep -q '"tenetx-guard"' "$HOME_DIR/.gemini/config/hooks.json" 2>/dev/null; then
+    say "residual wiring: $HOME_DIR/.gemini/config/hooks.json (tenetx-guard)"
+    fail=1
+  fi
+  # cline: file-presence registration
+  for d in "$HOME_DIR/Documents/Cline/Hooks" "$HOME_DIR/.cline/hooks"; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do
+      [ -f "$f" ] || continue
+      if grep -q 'TENETX-CLINE-HOOK' "$f" 2>/dev/null; then
+        say "residual wiring: $f (cline dispatch)"
+        fail=1
+      fi
+    done
+  done
+  if [ "$KEEP_BINARY" -eq 0 ]; then
+    for rc in $RC_FILES; do
+      if [ -f "$rc" ] && grep -qF "$CLI_PATH_MARK_START" "$rc" 2>/dev/null; then
+        say "residual wiring: $rc ($CLI_PATH_MARK_START)"
+        fail=1
+      fi
+    done
+    for d in "${TENETX_INSTALL_DIR:-}" /usr/local/bin /opt/homebrew/bin "$HOME_DIR/.local/bin"; do
+      d="${d%/}"
+      [ -n "$d" ] || continue
+      for b in "$d/tenetx.bak" "$d"/tenetx.*.bak; do
+        if [ -e "$b" ]; then
+          say "residual backup: $b"
+          fail=1
+        fi
+      done
+    done
+  fi
   return "$fail"
 }
 
