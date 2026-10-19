@@ -44,6 +44,13 @@ assets below do not include this unreleased fix. Project-local extensions and
 custom OMP config roots are not scanned; remove any TenetX registration there
 separately if you installed one.
 
+**Reported pre-hook failure:** This branch did not resolve the user's OMP
+failure. Hooks in `~/.omp/agent/hooks/pre/` failed closed instead of failing
+open, and the user removed them to unblock execution. The cleanup above scans
+extensions only; it does not scan `~/.omp/agent/hooks/pre/` or change hook
+runtime failure handling. Removing those pre-hooks was a manual workaround,
+not a fix provided by these scripts.
+
 ### One-liners (release v1.4.0)
 
 **macOS / Linux — inventory:**
