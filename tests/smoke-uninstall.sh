@@ -78,6 +78,13 @@ STUB
     : > "$sandbox/$d/hooks/.tenetx-guard.json"
   done
 
+  # OMP registration survives a partial uninstall with no guard payload.
+  mkdir -p "$sandbox/.omp/agent/extensions" "$sandbox/.omp/profiles/work/agent/extensions/guard"
+  printf '%s\n' 'const guard = "/missing/.tenetx/hooks/omp/tenetx-guard.sh";' > "$sandbox/.omp/agent/extensions/tenetx-guard.ts"
+  cp "$sandbox/.omp/agent/extensions/tenetx-guard.ts" "$sandbox/.omp/profiles/work/agent/extensions/guard/index.js"
+  printf '%s\n' 'export default function userExtension() {}' > "$sandbox/.omp/agent/extensions/user.ts"
+  printf '%s\n' 'keep me' > "$sandbox/.omp/agent/auth.json"
+
   # Updater residue + a stray wrapper backup
   mkdir -p "$sandbox/.qwen/hooks/__pycache__"
   : > "$sandbox/.qwen/hooks/__pycache__/tenetx-guard.cpython-312.pyc"
@@ -283,6 +290,11 @@ test_wipe_keep_binary() {
     ck_gone "guard removed: $d/hooks/.tenetx-guard.json" "$sandbox/$d/hooks/.tenetx-guard.json"
   done
 
+  ck_gone "OMP orphaned extension removed" "$sandbox/.omp/agent/extensions/tenetx-guard.ts"
+  ck_gone "OMP profile extension removed" "$sandbox/.omp/profiles/work/agent/extensions/guard/index.js"
+  ck_stay "OMP user extension preserved" "$sandbox/.omp/agent/extensions/user.ts"
+  ck_stay "OMP credentials preserved" "$sandbox/.omp/agent/auth.json"
+
   # -- residue --
   ck_gone "updater bytecode removed" "$sandbox/.qwen/hooks/__pycache__/tenetx-guard.cpython-312.pyc"
   ck_gone "wrapper backup removed" "$sandbox/.qwen/hooks/tenetx-guard.py.old"
@@ -379,6 +391,13 @@ test_dry_run_binary() {
   ck_grep "dry-run kept CLI PATH block" "$sandbox/.zshrc" 'TENETX_CLI_PATH'
   ck_stay "dry-run kept guard file" "$sandbox/.qwen/hooks/tenetx-guard.sh"
   ck_grep "dry-run kept Codex CLI block" "$sandbox/.zshrc" 'TenetX managed Codex CLI'
+  ck_stay "OMP dry-run preserves registration" "$sandbox/.omp/agent/extensions/tenetx-guard.ts"
+  if printf '%s' "$out" | grep -q 'OMP guard extension'; then
+    pass "OMP dry-run reports registration removal"
+  else
+    fail "OMP dry-run reports registration removal"
+  fi
+
 }
 
 # ============================================================================
@@ -423,6 +442,23 @@ test_wipe_default() {
   ck_grep "stub saw uninstall" "$stub_log" '^uninstall'
 }
 
+test_omp_inventory_and_repeat() {
+  make_fixture
+  out=$(run_wipe)
+  if printf '%s' "$out" | grep -q 'OMP extension:.*tenetx-guard.ts'; then
+    pass "OMP inventory discovers orphaned registration"
+  else
+    fail "OMP inventory discovers orphaned registration"
+  fi
+  ck_stay "OMP inventory is read-only" "$sandbox/.omp/agent/extensions/tenetx-guard.ts"
+  run_wipe --force --keep-binary --skip-revoke >/dev/null
+  if run_wipe --force --keep-binary --skip-revoke >/dev/null; then
+    pass "OMP cleanup is idempotent"
+  else
+    fail "OMP cleanup is idempotent"
+  fi
+}
+
 # ============================================================================
 # Main
 # ============================================================================
@@ -438,6 +474,7 @@ main() {
   test_dry_run_binary
   printf '\n'
   test_wipe_default
+  test_omp_inventory_and_repeat
 
   if [ "$(host_snapshot)" = "$host_before" ]; then
     pass "host CLI binaries untouched"

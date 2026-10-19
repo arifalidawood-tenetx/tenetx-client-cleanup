@@ -9,7 +9,7 @@
 #   # or download then:  .\uninstall-complete.ps1 -Force
 #
 # Parity with local-stacks/runners/complete_uninstall.py and uninstall-complete.sh.
-# Covers all 12 CLI agents (cli-go/internal/ide/ide.go Slugs; cline is
+# Covers all 13 CLI agents (cli-go/internal/ide/ide.go Slugs; cline is
 # macOS/Linux only) + run.sh build-cli tenetx.exe.bak.
 # On macOS/Linux use uninstall-complete.sh instead.
 #
@@ -158,7 +158,22 @@ function Get-Binaries {
     return $out
 }
 
+# OMP extensions register by file presence, not JSON hook entries.
+function Get-OmpGuardExtensions {
+    $roots = @((Join-Path $HomeDir '.omp\agent'))
+    $roots += @(Get-ChildItem -Path (Join-Path $HomeDir '.omp\profiles\*\agent') -Directory -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    foreach ($root in $roots) {
+        $ext = Join-Path $root 'extensions'
+        foreach ($pattern in @('*.ts', '*.js', '*\index.ts', '*\index.js')) {
+            Get-ChildItem -Path (Join-Path $ext $pattern) -File -ErrorAction SilentlyContinue |
+                Where-Object { Select-String -LiteralPath $_.FullName -Pattern 'tenetx-guard' -Quiet } |
+                ForEach-Object { $_.FullName }
+        }
+    }
+}
+
 function Show-Inventory([string]$Label) {
+    foreach ($f in @(Get-OmpGuardExtensions)) { Write-Say "OMP extension: $f" }
     Write-Say ""
     Write-Say "=== inventory $Label ==="
     Write-Say "HOME=$HomeDir"
@@ -190,6 +205,7 @@ function Show-Inventory([string]$Label) {
         @{ Name = 'claude_code'; Hooks = (Join-Path $HomeDir '.claude\hooks') },
         @{ Name = 'cursor'; Hooks = (Join-Path $HomeDir '.cursor\hooks') },
         @{ Name = 'windsurf'; Hooks = (Join-Path $HomeDir '.windsurf\hooks') },
+        @{ Name = 'omp'; Hooks = (Join-Path $TenetxDir 'hooks\omp') },
         @{ Name = 'codex'; Hooks = (Join-Path $TenetxDir 'hooks\codex') },
         @{ Name = 'copilot'; Hooks = (Join-Path $HomeDir '.copilot\hooks') },
         @{ Name = 'antigravity'; Hooks = (Join-Path $HomeDir '.antigravity\hooks') },
@@ -614,6 +630,18 @@ function Invoke-HardWipe {
     Scrub-JsonFile (Join-Path $HomeDir '.windsurf\mcp.json') 'hooks'
     Scrub-JsonFile (Join-Path $HomeDir '.windsurf\mcp.json') 'mcp'
 
+    # Remove OMP's auto-loaded extension before the guard payload.
+    foreach ($f in @(Get-OmpGuardExtensions)) {
+        Note "delete: $f (OMP guard extension)"
+        if (-not $DryRun) {
+            try { Remove-Item -LiteralPath $f -Force } catch {
+                Write-Warn "delete failed $f : $_"
+                $script:HadError = $true
+            }
+        }
+    }
+    Remove-GuardDir (Join-Path $TenetxDir 'hooks\omp')
+
     # codex
     Remove-GuardDir (Join-Path $TenetxDir 'hooks\codex')
     Scrub-JsonFile (Join-Path $HomeDir '.codex\hooks.json') 'hooks'
@@ -789,6 +817,10 @@ function Remove-BinaryAndPath {
 
 function Test-Residuals {
     $fail = $false
+    foreach ($f in @(Get-OmpGuardExtensions)) {
+        Write-Say "residual OMP extension: $f"
+        $fail = $true
+    }
     if (Test-Path -LiteralPath $TenetxDir) {
         $files = @(Get-ChildItem -LiteralPath $TenetxDir -Recurse -File -ErrorAction SilentlyContinue)
         if ($files.Count -gt 0) {

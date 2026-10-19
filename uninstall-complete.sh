@@ -9,7 +9,7 @@
 #   # or: TENETX_FORCE=1 curl -fsSL <URL>/uninstall-complete.sh | sh
 #
 # Parity with local-stacks/runners/complete_uninstall.py.
-# Covers all 12 CLI agents (cli-go/internal/ide/ide.go Slugs) + run.sh build-cli
+# Covers all 13 CLI agents (cli-go/internal/ide/ide.go Slugs) + run.sh build-cli
 # PATH block/.bak.
 # On Windows use uninstall-complete.ps1 instead.
 #
@@ -262,11 +262,29 @@ find_tenetx() {
   return 1
 }
 
+# OMP auto-loads JS/TS extensions by file presence, even after ~/.tenetx
+# has gone. Only remove modules that reference our guard, never the directory.
+# Include named profiles; do not traverse projects or arbitrary user paths.
+omp_extensions() {
+  for root in "$HOME_DIR/.omp/agent" "$HOME_DIR"/.omp/profiles/*/agent; do
+    for f in "$root"/extensions/*.ts "$root"/extensions/*.js "$root"/extensions/*/index.ts "$root"/extensions/*/index.js; do
+      [ -f "$f" ] || continue
+      grep -q 'tenetx-guard' "$f" 2>/dev/null || continue
+      case "$1" in
+        inventory) say "OMP extension: $f" ;;
+        remove) del_file "$f" "OMP guard extension" ;;
+        check) say "residual OMP extension: $f"; fail=1 ;;
+      esac
+    done
+  done
+}
+
 inventory() {
   label="$1"
   say ""
   say "=== inventory $label ==="
   say "HOME=$HOME_DIR"
+  omp_extensions inventory
   if [ -d "$TENETX_DIR" ]; then
     n=$(find "$TENETX_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
     say "TENETX_DIR=$TENETX_DIR exists=yes files=$n"
@@ -297,6 +315,7 @@ inventory() {
     "claude_code|$HOME_DIR/.claude/hooks" \
     "cursor|$HOME_DIR/.cursor/hooks" \
     "windsurf|$HOME_DIR/.windsurf/hooks" \
+    "omp|$TENETX_DIR/hooks/omp" \
     "codex|$TENETX_DIR/hooks/codex" \
     "copilot|$HOME_DIR/.copilot/hooks" \
     "antigravity|$HOME_DIR/.antigravity/hooks" \
@@ -501,6 +520,9 @@ remove_guard_dir() {
 }
 
 hard_wipe() {
+  # Remove OMP registration BEFORE deleting the shared guard payload.
+  omp_extensions remove
+  remove_guard_dir "$TENETX_DIR/hooks/omp"
   # One block per agent; order + paths mirror cli-go/internal/ide/ide.go
   # (layoutBySlug) and hooks.Uninstall. cline/vibe are skipped on Windows only,
   # which this script never runs on.
@@ -690,6 +712,7 @@ remove_binaries() {
 
 check_residuals() {
   fail=0
+  omp_extensions check
   if [ -d "$TENETX_DIR" ]; then
     n=$(find "$TENETX_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
     if [ "$n" != "0" ]; then

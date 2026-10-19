@@ -23,7 +23,26 @@ Removes TenetX client artifacts beyond the product's built-in uninstall.
 
 Inventory/wipe includes guard scripts under agent hooks dirs (`tenetx-guard.py` / `.sh` / `.cmd` / `.ps1`) and other `tenetx-*` residue file names. Does **not** touch product-repo `local-stacks/` mirrors.
 
-**Covered agents (all 12 the CLI installs)** — `claude_code`, `codex`, `cursor`, `copilot`, `windsurf` (incl. Devin Local `~/.config/devin/config.json`), `antigravity`, `qwen_code`, `hermes`, `augment_code`, `kiro`, `cline` (macOS/Linux), `vibe_code`. Also removes `run.sh build-cli` residue: the `~/.local/bin` `# >>> TENETX_CLI_PATH >>>` PATH block and `tenetx*.bak`.
+**Covered agents (13)** — `claude_code`, `codex`, `cursor`, `copilot`, `windsurf` (incl. Devin Local `~/.config/devin/config.json`), `antigravity`, `qwen_code`, `hermes`, `augment_code`, `kiro`, `cline` (macOS/Linux), `vibe_code`, `omp` (Oh My Pi). Also removes `run.sh build-cli` residue: the `~/.local/bin` `# >>> TENETX_CLI_PATH >>>` PATH block and `tenetx*.bak`.
+
+### OMP partial-uninstall recovery
+
+OMP auto-loads extensions from `~/.omp/agent/extensions` (also named profiles
+under `~/.omp/profiles/*/agent/extensions`). A leftover TenetX extension can
+block every bash call with `ENOENT ... .tenetx/hooks/omp/tenetx-guard.sh` after
+its guard payload has been removed.
+
+The updated wipe scripts remove JS/TS extension modules referencing
+`tenetx-guard`, including directory `index.ts` / `index.js` entry points,
+before wiping the OMP guard payload. Unrelated extensions, settings, sessions,
+and credentials are preserved. Inventory, dry-run, and residual checks include
+these registrations, even when `~/.tenetx` is already missing.
+
+Run the updated **local clone** script below from a terminal outside OMP,
+then restart OMP so its in-memory extension is unloaded. The published v1.4.0
+assets below do not include this unreleased fix. Project-local extensions and
+custom OMP config roots are not scanned; remove any TenetX registration there
+separately if you installed one.
 
 ### One-liners (release v1.4.0)
 
