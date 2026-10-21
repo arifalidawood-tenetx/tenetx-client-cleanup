@@ -9,7 +9,7 @@
 #   # or: TENETX_FORCE=1 curl -fsSL <URL>/uninstall-complete.sh | sh
 #
 # Parity with local-stacks/runners/complete_uninstall.py.
-# Covers all 12 CLI agents (cli-go/internal/ide/ide.go Slugs) + run.sh build-cli
+# Covers all 13 CLI agents (cli-go/internal/ide/ide.go Slugs) + run.sh build-cli
 # PATH block/.bak.
 # On Windows use uninstall-complete.ps1 instead.
 #
@@ -62,6 +62,19 @@ HOME_DIR="${HOME:-}"
 [ -n "$HOME_DIR" ] || err "HOME not set"
 
 TENETX_DIR="${TENETX_CONFIG_DIR:-$HOME_DIR/.tenetx}"
+OMP_BRIDGE_MARK='TENETX-OMP-BRIDGE'
+OMP_BRIDGE_DEFAULT="$HOME_DIR/.omp/agent/hooks/pre/tenetx-guard.js"
+OMP_BRIDGE_OVERRIDE=""
+OMP_AGENT_DIR="${PI_CODING_AGENT_DIR:-}"
+OMP_AGENT_DIR="${OMP_AGENT_DIR#"${OMP_AGENT_DIR%%[![:space:]]*}"}"
+OMP_AGENT_DIR="${OMP_AGENT_DIR%"${OMP_AGENT_DIR##*[![:space:]]}"}"
+if [ -n "$OMP_AGENT_DIR" ]; then
+  case "$OMP_AGENT_DIR" in
+    "~/"*) OMP_BRIDGE_OVERRIDE="$HOME_DIR/${OMP_AGENT_DIR#"~/"}/hooks/pre/tenetx-guard.js" ;;
+    *) OMP_BRIDGE_OVERRIDE="${OMP_AGENT_DIR%/}/hooks/pre/tenetx-guard.js" ;;
+  esac
+  [ "$OMP_BRIDGE_OVERRIDE" != "$OMP_BRIDGE_DEFAULT" ] || OMP_BRIDGE_OVERRIDE=""
+fi
 HAD_ERROR=0
 ACTIONS=0
 
@@ -202,6 +215,20 @@ remove_cline_dispatch() {
   done
 }
 
+# omp registers the guard as a JS module omp imports from <agentDir>/hooks/pre;
+# ownership is the TENETX-OMP-BRIDGE marker (hooks/ompbridge.go uninstallOmp).
+# A same-named file without the marker is the user's; tenetx-guard.js.tenetx-backup
+# is the user's pre-TenetX module — both are left alone.
+is_omp_bridge() { [ -f "$1" ] && grep -qF "$OMP_BRIDGE_MARK" "$1" 2>/dev/null; }
+remove_omp_bridge() {
+  for f in "$OMP_BRIDGE_DEFAULT" "$OMP_BRIDGE_OVERRIDE"; do
+    [ -n "$f" ] || continue
+    is_omp_bridge "$f" || continue
+    del_file "$f" "omp bridge"
+    [ "$DRY_RUN" -eq 1 ] || say "  NOTE: restart running omp sessions — they keep the removed bridge in memory and block every tool call"
+  done
+}
+
 # CLI backup residue (cli-go/internal/uninstall/cleanup.go Backups). Our own
 # *.tenetx-complete-uninstall-backup and fix-agent-hooks' *.tenetx-bak-* are the
 # operators' rollback points and are deliberately kept.
@@ -305,7 +332,8 @@ inventory() {
     "augment_code|$HOME_DIR/.augment/hooks" \
     "kiro|$HOME_DIR/.kiro/hooks" \
     "cline|$TENETX_DIR/hooks/cline" \
-    "vibe_code|$HOME_DIR/.vibe/hooks"
+    "vibe_code|$HOME_DIR/.vibe/hooks" \
+    "omp|$TENETX_DIR/hooks/omp"
   do
     name=${pair%%|*}
     hooks=${pair#*|}
@@ -323,6 +351,11 @@ inventory() {
     if [ -n "$found" ]; then
       say "IDE $name:$found"
     fi
+  done
+
+  for f in "$OMP_BRIDGE_DEFAULT" "$OMP_BRIDGE_OVERRIDE"; do
+    [ -n "$f" ] || continue
+    if is_omp_bridge "$f"; then say "IDE omp bridge: $f"; fi
   done
 }
 
@@ -564,6 +597,10 @@ hard_wipe() {
   remove_guard_dir "$HOME_DIR/.vibe/hooks"
   strip_marker_block "$HOME_DIR/.vibe/hooks.toml" "$VIBE_MARK_START" "$VIBE_MARK_END"
 
+  # omp — no settings file; the bridge module is the whole registration
+  remove_guard_dir "$TENETX_DIR/hooks/omp"
+  remove_omp_bridge
+
   # codex: MCP rows in config.toml, plus adapter-owned rule file + browser skill
   toml="$HOME_DIR/.codex/config.toml"
   if [ -f "$toml" ] && command -v python3 >/dev/null 2>&1; then
@@ -755,6 +792,13 @@ check_residuals() {
         fail=1
       fi
     done
+  done
+  for f in "$OMP_BRIDGE_DEFAULT" "$OMP_BRIDGE_OVERRIDE"; do
+    [ -n "$f" ] || continue
+    if is_omp_bridge "$f"; then
+      say "residual wiring: $f (omp bridge)"
+      fail=1
+    fi
   done
   if [ "$KEEP_BINARY" -eq 0 ]; then
     for rc in $RC_FILES; do

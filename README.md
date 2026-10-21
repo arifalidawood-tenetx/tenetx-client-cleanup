@@ -23,33 +23,35 @@ Removes TenetX client artifacts beyond the product's built-in uninstall.
 
 Inventory/wipe includes guard scripts under agent hooks dirs (`tenetx-guard.py` / `.sh` / `.cmd` / `.ps1`) and other `tenetx-*` residue file names. Does **not** touch product-repo `local-stacks/` mirrors.
 
-**Covered agents (all 12 the CLI installs)** — `claude_code`, `codex`, `cursor`, `copilot`, `windsurf` (incl. Devin Local `~/.config/devin/config.json`), `antigravity`, `qwen_code`, `hermes`, `augment_code`, `kiro`, `cline` (macOS/Linux), `vibe_code`. Also removes `run.sh build-cli` residue: the `~/.local/bin` `# >>> TENETX_CLI_PATH >>>` PATH block and `tenetx*.bak`.
+**Covered agents (all 13 the CLI installs)** — `claude_code`, `codex`, `cursor`, `copilot`, `windsurf` (incl. Devin Local `~/.config/devin/config.json`), `antigravity`, `qwen_code`, `hermes`, `augment_code`, `kiro`, `cline` (macOS/Linux), `vibe_code`, `omp` (Oh My Pi). Also removes `run.sh build-cli` residue: the `~/.local/bin` `# >>> TENETX_CLI_PATH >>>` PATH block and `tenetx*.bak`.
 
-### One-liners (release v1.4.0)
+omp cleanup removes the guard runtime under `$TENETX_CONFIG_DIR/hooks/omp` (default `~/.tenetx/hooks/omp`). It removes `tenetx-guard.js` only when the file contains `TENETX-OMP-BRIDGE`, checking both `~/.omp/agent/hooks/pre` and `$PI_CODING_AGENT_DIR/hooks/pre` and expanding a leading `~/`. Unmarked modules and `tenetx-guard.js.tenetx-backup` are preserved. Restart running omp sessions after removing a bridge; they keep the module in memory and can still block tool calls.
+
+### One-liners (release v1.4.1)
 
 **macOS / Linux — inventory:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/uninstall-complete.sh | sh
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.1/uninstall-complete.sh | sh
 ```
 
 **macOS / Linux — wipe:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/uninstall-complete.sh | sh -s -- --force
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.1/uninstall-complete.sh | sh -s -- --force
 ```
 
 **Windows — inventory:**
 
 ```powershell
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/uninstall-complete.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.1/uninstall-complete.ps1 | iex
 ```
 
 **Windows — wipe:**
 
 ```powershell
 $env:TENETX_FORCE = '1'
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/uninstall-complete.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.1/uninstall-complete.ps1 | iex
 ```
 
 ### Local clone
@@ -75,44 +77,44 @@ os.environ.get("TENETX_AGENT_CAPTURE", "<baked-default>") == "1"
 
 The baked default is usually `0` unless the org was in server `TENETX_CAPTURE_ORGS` at hook install time. This script sets the client override so capture works without reinstalling hooks.
 
-### One-liners (release v1.4.0)
+### One-liners (release v1.4.1)
 
 **macOS / Linux — enable:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/enable-agent-capture.sh | sh -s -- enable
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.1/enable-agent-capture.sh | sh -s -- enable
 ```
 
 **macOS / Linux — disable:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/enable-agent-capture.sh | sh -s -- disable
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.1/enable-agent-capture.sh | sh -s -- disable
 ```
 
 **macOS / Linux — status:**
 
 ```bash
-curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/enable-agent-capture.sh | sh -s -- status
+curl -fsSL https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.1/enable-agent-capture.sh | sh -s -- status
 ```
 
 **Windows — enable:**
 
 ```powershell
 $env:TENETX_CAPTURE_ACTION = 'enable'
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/enable-agent-capture.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.1/enable-agent-capture.ps1 | iex
 ```
 
 **Windows — disable:**
 
 ```powershell
 $env:TENETX_CAPTURE_ACTION = 'disable'
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/enable-agent-capture.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.1/enable-agent-capture.ps1 | iex
 ```
 
 **Windows — status:**
 
 ```powershell
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/enable-agent-capture.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.1/enable-agent-capture.ps1 | iex
 ```
 
 ### Local clone
@@ -195,19 +197,19 @@ pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Apply -IncludeCursor -IncludeCodex
 pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Revert -Agents claude,copilot
 ```
 
-### One-liners (release v1.3.1)
+### One-liners (release v1.4.1)
 
 **Windows — dry-run:**
 
 ```powershell
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/fix-agent-hooks.ps1 | iex
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.1/fix-agent-hooks.ps1 | iex
 ```
 
 **Windows — apply (claude + copilot defaults):**
 
 ```powershell
 # Download then apply (iex alone cannot pass -Apply reliably)
-irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.0/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
+irm https://github.com/arifalidawood-tenetx/tenetx-client-cleanup/releases/download/v1.4.1/fix-agent-hooks.ps1 -OutFile fix-agent-hooks.ps1
 pwsh -NoProfile -File .\fix-agent-hooks.ps1 -Apply -Verify
 ```
 
@@ -233,6 +235,7 @@ Requires PowerShell 7+, optional real install paths for decision-body assert (`t
 | `--keep-binary` / `-KeepBinary` | Leave CLI binary |
 | `--skip-revoke` / `-SkipRevoke` | Skip `tenetx logout --revoke` |
 | `--org SLUG` / `-Org SLUG` | Pass through to `tenetx uninstall --org` |
+| `PI_CODING_AGENT_DIR` | Additional omp agent directory to check for a marked bridge; the default directory is always checked |
 
 ### Capture flags
 
@@ -267,7 +270,14 @@ Requires PowerShell 7+, optional real install paths for decision-body assert (`t
 
 ## Versions
 
-### v1.4.0 (current)
+### v1.4.1 (current)
+
+- Added omp cleanup to both uninstall scripts, including custom agent directories, marker-based ownership checks, inventory, and residual detection.
+- Added regression coverage for bridge removal, dry-run preservation, override directories, and user-owned modules and backups.
+- Isolated smoke-test config and omp directory overrides from the host environment.
+- Match the omp ownership marker case-sensitively on both platforms and trim surrounding whitespace from `PI_CODING_AGENT_DIR` to match the installer.
+
+### v1.4.0
 
 12-agent uninstall parity with the `tenetx` CLI, plus `build-cli` residue cleanup:
 

@@ -12,10 +12,11 @@
 # list_binaries() hard-codes the host install dirs.
 #
 # Tests:
-#   - wipe-keep-binary: --force --skip-revoke --keep-binary removes all 12
+#   - wipe-keep-binary: --force --skip-revoke --keep-binary removes all 13
 #     agents' TenetX wiring and keeps every user entry
 #   - dry-run-binary: --dry-run reports the binary .bak + CLI PATH block and
 #     changes nothing
+#   - omp-override: PI_CODING_AGENT_DIR bridge removed; unmarked files kept
 #
 
 set -u
@@ -39,6 +40,7 @@ pass_count=0
 fail_count=0
 sandbox=""
 stub_log=""
+smoke_pi_dir=""
 
 pass() {
   test_count=$((test_count + 1))
@@ -147,6 +149,10 @@ EOF
   mkdir -p "$sandbox/Documents/Cline/Hooks"
   printf '%s\n' '# TENETX-CLINE-HOOK — PreToolUse' > "$sandbox/Documents/Cline/Hooks/PreToolUse"
   printf '%s\n' '# user content' > "$sandbox/Documents/Cline/Hooks/Notification"
+  mkdir -p "$sandbox/.omp/agent/hooks/pre" "$sandbox/.tenetx/hooks/omp"
+  printf '%s\n' '// TENETX-OMP-BRIDGE v1' 'const HOOK_COMMAND = "x";' > "$sandbox/.omp/agent/hooks/pre/tenetx-guard.js"
+  printf '%s\n' '// user hook' > "$sandbox/.omp/agent/hooks/pre/user.js"
+  : > "$sandbox/.tenetx/hooks/omp/tenetx-guard.sh"
 
   # User-owned files that must never be removed
   : > "$sandbox/.claude/hooks/hooks.json"
@@ -186,11 +192,12 @@ run_wipe() {
   # UNINSTALL_SH=/bin/dash reproduces the Linux /bin/sh path (macOS /bin/sh is
   # bash 3.2, which is laxer about `set -u` and about stray shell globals).
   (
-    unset TENETX_CONFIG_DIR TENETX_INSTALL_DIR
+    unset TENETX_CONFIG_DIR TENETX_INSTALL_DIR PI_CODING_AGENT_DIR
     HOME="$sandbox"
     PATH="$sandbox/stub:/usr/bin:/bin"
     SANDBOX_STUB_LOG="$stub_log"
     export HOME PATH SANDBOX_STUB_LOG
+    if [ -n "$smoke_pi_dir" ]; then PI_CODING_AGENT_DIR=$smoke_pi_dir; export PI_CODING_AGENT_DIR; fi
     timeout_guard 60 "${UNINSTALL_SH:-sh}" "$sandbox/uninstall-complete.sh" "$@"
   ) 2>&1
 }
@@ -296,6 +303,7 @@ test_wipe_keep_binary() {
   ck_gone "codex browser skill removed" "$sandbox/.agents/skills/tenetx-browser"
   ck_gone "cache removed" "$sandbox/.cache/tenetx"
   ck_gone "legacy cursor hooks.json removed" "$sandbox/.cursor/hooks/hooks.json"
+  ck_gone "omp bridge removed" "$sandbox/.omp/agent/hooks/pre/tenetx-guard.js"
 
   # -- wiring scrubbed --
   ck_nogrep "qwen hook wiring scrubbed" "$sandbox/.qwen/settings.json" 'tenetx-guard'
@@ -328,6 +336,7 @@ test_wipe_keep_binary() {
   ck_stay "kiro keeps user hook" "$sandbox/.kiro/hooks/user.json"
   ck_stay "cline keeps user hook" "$sandbox/Documents/Cline/Hooks/Notification"
   ck_stay "other agents skill kept" "$sandbox/.agents/skills/other/SKILL.md"
+  ck_stay "omp keeps user hook module" "$sandbox/.omp/agent/hooks/pre/user.js"
   ck_stay "claude user hooks.json kept" "$sandbox/.claude/hooks/hooks.json"
   ck_grep "zshrc keeps user export" "$sandbox/.zshrc" 'export FOO=1'
 
@@ -379,6 +388,12 @@ test_dry_run_binary() {
   ck_grep "dry-run kept CLI PATH block" "$sandbox/.zshrc" 'TENETX_CLI_PATH'
   ck_stay "dry-run kept guard file" "$sandbox/.qwen/hooks/tenetx-guard.sh"
   ck_grep "dry-run kept Codex CLI block" "$sandbox/.zshrc" 'TenetX managed Codex CLI'
+  if printf '%s' "$out" | grep -qF "delete: $sandbox/.omp/agent/hooks/pre/tenetx-guard.js (omp bridge)"; then
+    pass "dry-run lists omp bridge deletion"
+  else
+    fail "dry-run lists omp bridge deletion"
+  fi
+  ck_stay "dry-run kept omp bridge" "$sandbox/.omp/agent/hooks/pre/tenetx-guard.js"
 }
 
 # ============================================================================
@@ -423,6 +438,38 @@ test_wipe_default() {
   ck_grep "stub saw uninstall" "$stub_log" '^uninstall'
 }
 
+test_omp_override() {
+  make_fixture
+  # Default bridge is the user's (no marker), and so is its backup.
+  printf '%s\n' '// my own module' > "$sandbox/.omp/agent/hooks/pre/tenetx-guard.js"
+  : > "$sandbox/.omp/agent/hooks/pre/tenetx-guard.js.tenetx-backup"
+  # The marked bridge lives under the PI_CODING_AGENT_DIR override instead.
+  mkdir -p "$sandbox/alt-agent/hooks/pre"
+  printf '%s\n' '// TENETX-OMP-BRIDGE v1' > "$sandbox/alt-agent/hooks/pre/tenetx-guard.js"
+
+  smoke_pi_dir=" $(printf '\t')$sandbox/alt-agent $(printf '\t')"
+  out=$(run_wipe --force --skip-revoke --keep-binary)
+  ec=$?
+  smoke_pi_dir=""
+
+  if [ "$ec" -ne 0 ]; then
+    printf '%s\n' "$out" | tail -20
+    fail "override wipe exits 0 (got $ec)"
+  else
+    pass "override wipe exits 0"
+  fi
+  if printf '%s' "$out" | grep -q 'COMPLETE-UNINSTALL OK'; then
+    pass "override wipe reports COMPLETE-UNINSTALL OK"
+  else
+    printf '%s\n' "$out" | tail -20
+    fail "override wipe reports COMPLETE-UNINSTALL OK"
+  fi
+
+  ck_gone "override omp bridge removed" "$sandbox/alt-agent/hooks/pre/tenetx-guard.js"
+  ck_stay "unmarked default tenetx-guard.js kept" "$sandbox/.omp/agent/hooks/pre/tenetx-guard.js"
+  ck_stay "omp .tenetx-backup kept" "$sandbox/.omp/agent/hooks/pre/tenetx-guard.js.tenetx-backup"
+}
+
 # ============================================================================
 # Main
 # ============================================================================
@@ -438,6 +485,8 @@ main() {
   test_dry_run_binary
   printf '\n'
   test_wipe_default
+  printf '\n'
+  test_omp_override
 
   if [ "$(host_snapshot)" = "$host_before" ]; then
     pass "host CLI binaries untouched"

@@ -9,7 +9,7 @@
 #   # or download then:  .\uninstall-complete.ps1 -Force
 #
 # Parity with local-stacks/runners/complete_uninstall.py and uninstall-complete.sh.
-# Covers all 12 CLI agents (cli-go/internal/ide/ide.go Slugs; cline is
+# Covers all 13 CLI agents (cli-go/internal/ide/ide.go Slugs; cline is
 # macOS/Linux only) + run.sh build-cli tenetx.exe.bak.
 # On macOS/Linux use uninstall-complete.sh instead.
 #
@@ -86,6 +86,14 @@ if (-not $Force -and (Test-Interactive)) {
 
 $HomeDir = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($env:HOME) { $env:HOME } else { [Environment]::GetFolderPath('UserProfile') }
 $TenetxDir = if ($env:TENETX_CONFIG_DIR) { $env:TENETX_CONFIG_DIR } else { Join-Path $HomeDir '.tenetx' }
+$OmpBridgeMark = 'TENETX-OMP-BRIDGE'
+$OmpBridgePaths = @(Join-Path $HomeDir '.omp\agent\hooks\pre\tenetx-guard.js')
+$piDir = "$env:PI_CODING_AGENT_DIR".Trim()
+if ($piDir) {
+    if ($piDir.StartsWith('~/') -or $piDir.StartsWith('~\')) { $piDir = Join-Path $HomeDir $piDir.Substring(2) }
+    $OmpBridgePaths += (Join-Path $piDir 'hooks\pre\tenetx-guard.js')
+}
+$OmpBridgePaths = @($OmpBridgePaths | Select-Object -Unique)
 $LocalAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HomeDir 'AppData\Local' }
 $WinBinDir = Join-Path $LocalAppData 'TenetX\bin'
 $WinBinary = Join-Path $WinBinDir 'tenetx.exe'
@@ -198,7 +206,8 @@ function Show-Inventory([string]$Label) {
         @{ Name = 'augment_code'; Hooks = (Join-Path $HomeDir '.augment\hooks') },
         @{ Name = 'kiro'; Hooks = (Join-Path $HomeDir '.kiro\hooks') },
         @{ Name = 'cline'; Hooks = (Join-Path $TenetxDir 'hooks\cline') },
-        @{ Name = 'vibe_code'; Hooks = (Join-Path $HomeDir '.vibe\hooks') }
+        @{ Name = 'vibe_code'; Hooks = (Join-Path $HomeDir '.vibe\hooks') },
+        @{ Name = 'omp'; Hooks = (Join-Path $TenetxDir 'hooks\omp') }
     )
     $guards = @(
         'tenetx-guard.py', 'tenetx-guard.sh', 'tenetx-guard.cmd', 'tenetx-guard.ps1',
@@ -225,6 +234,9 @@ function Show-Inventory([string]$Label) {
         if ($found.Count -gt 0) {
             Write-Say ("IDE {0}: {1}" -f $entry.Name, ($found -join ' '))
         }
+    }
+    foreach ($p in $OmpBridgePaths) {
+        if (Test-OmpBridge $p) { Write-Say "IDE omp bridge: $p" }
     }
 }
 
@@ -579,6 +591,28 @@ function Remove-GuardDir([string]$HooksDir) {
     }
 }
 
+function Test-OmpBridge([string]$Path) {
+    return ((Test-Path -LiteralPath $Path -PathType Leaf) -and
+        (Select-String -LiteralPath $Path -SimpleMatch -CaseSensitive -Pattern $OmpBridgeMark -Quiet))
+}
+
+function Remove-OmpBridge {
+    foreach ($p in $OmpBridgePaths) {
+        if (-not (Test-OmpBridge $p)) { continue }
+        Note "delete: $p (omp bridge)"
+        if (-not $DryRun) {
+            try {
+                Remove-Item -LiteralPath $p -Force
+            } catch {
+                Write-Warn "delete failed $p : $_"
+                $script:HadError = $true
+                continue
+            }
+            Write-Say '  NOTE: restart running omp sessions — they keep the removed bridge in memory and block every tool call'
+        }
+    }
+}
+
 function Invoke-HardWipe {
     # One block per agent; order + paths mirror cli-go/internal/ide/ide.go
     # (layoutBySlug) and hooks.Uninstall. Cline is macOS/Linux only — the CLI
@@ -646,6 +680,10 @@ function Invoke-HardWipe {
     # vibe_code
     Remove-GuardDir (Join-Path $HomeDir '.vibe\hooks')
     Strip-MarkerBlock (Join-Path $HomeDir '.vibe\hooks.toml') $VibeMarkStart $VibeMarkEnd
+
+    # omp — no settings file; the bridge module is the whole registration
+    Remove-GuardDir (Join-Path $TenetxDir 'hooks\omp')
+    Remove-OmpBridge
 
     # codex: MCP rows in config.toml, plus adapter-owned rule file + browser skill
     Scrub-TomlFile (Join-Path $HomeDir '.codex\config.toml')
@@ -868,6 +906,13 @@ function Test-Residuals {
         (Select-String -LiteralPath $geminiHooks -SimpleMatch -Pattern '"tenetx-guard"' -Quiet)) {
         Write-Say "residual wiring: $geminiHooks (tenetx-guard)"
         $fail = $true
+    }
+    # omp: bridge module is ours only when it carries the marker
+    foreach ($p in $OmpBridgePaths) {
+        if (Test-OmpBridge $p) {
+            Write-Say "residual wiring: $p (omp bridge)"
+            $fail = $true
+        }
     }
     return -not $fail
 }

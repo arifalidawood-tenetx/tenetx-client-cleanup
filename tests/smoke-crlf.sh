@@ -121,6 +121,7 @@ test_exec_piped() {
   # --dry-run is non-destructive; run with a throwaway HOME so inventory is
   # empty and nothing outside /tmp is touched.
   out=$(
+    unset TENETX_CONFIG_DIR TENETX_INSTALL_DIR PI_CODING_AGENT_DIR
     HOME="$test_dir" \
     timeout_guard 30 sh uninstall-complete.sh --dry-run 2>&1
   )
